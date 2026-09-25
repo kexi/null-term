@@ -57,6 +57,7 @@ cargo build --release && cp config.example.toml null-bbs.toml
 ブラウザ版を **https://kexi.github.io/null-term/?a=ws://127.0.0.1:5657** で開くと、上画面が null-bbs につながります
 （`Ctrl-A p` のポート選択で `ws://` の URL を選ぶか直接入力しても同じ）。
 
+- 公開ページ (https) から `127.0.0.1` につなぐと、Chrome が「ローカル ネットワーク上のデバイスへのアクセス」の許可を求めます。許可するまで `接続中` のまま止まります
 - WebSocket の回線では接続時に `ATI3` を送らず、文字コードは null-bbs に合わせて UTF-8 に切り替えます
 - `Ctrl-A H` で切断します。BBS 側から切られた場合は自動で再接続しません
 - 上下両方の画面を BBS につなぐと、チャットや電報 (TEL) を 1 画面ずつの利用者として試せます

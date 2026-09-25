@@ -27,6 +27,16 @@ use null_term_core::keys::{Key, KeyCode};
 use null_term_core::transfer::{FileSink, Protocol, SendFile};
 use null_term_core::{ui, App};
 
+/// 未接続の画面に出す案内 (A, B)
+const WELCOME: [&str; 2] = [
+    "\r\n  null-term ブラウザ版へようこそ\r\n\r\n\
+     \x20   Ctrl-A p   ポートを選んで接続 (USB のシリアル機器、または ws:// で BBS)\r\n\
+     \x20   Ctrl-A ?   キー操作の一覧\r\n\
+     \x20   Ctrl-A z   この画面を最大化 (1 画面で使う)\r\n\r\n\
+     \x20 上下は独立した 2 台の端末です。詳しくはページ下の「使い方」を見てください。\r\n",
+    "\r\n  下の画面 (B) も別の回線につなげます。Ctrl-A 2 で選んでから Ctrl-A p\r\n",
+];
+
 /// 非同期タスクから App への出来事
 pub enum WebEvent {
     Serial(SerialEvent),
@@ -396,6 +406,9 @@ fn start() -> Result<()> {
         ch.local_echo = o.echo;
         ch.auto_probe = o.probe;
         ch.status = "未接続 (Ctrl-A p でポート選択)".into();
+        if ch.cfg.path.is_none() {
+            ch.parser.process(WELCOME[i].as_bytes());
+        }
         ch
     });
     APP.with(|a| *a.borrow_mut() = Some(App::new(channels, Box::new(WebHost))));

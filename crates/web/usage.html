@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>null-term 使い方</title>
+    <meta name="description" content="null-term ブラウザ版 (Web Serial) の使い方" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --fg: #1d1d1f;
+        --muted: #5f6368;
+        --bg: #ffffff;
+        --panel: #f4f5f7;
+        --border: #d9dce1;
+        --accent: #2050d0;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --fg: #e6e6e6;
+          --muted: #a0a4ab;
+          --bg: #0e1016;
+          --panel: #181b24;
+          --border: #2c3140;
+          --accent: #7fb4ff;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.75 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+      }
+      main {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 24px 16px 64px;
+      }
+      h1 {
+        font-size: 28px;
+        margin: 8px 0 4px;
+      }
+      h2 {
+        font-size: 20px;
+        margin: 40px 0 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid var(--border);
+      }
+      h3 {
+        font-size: 16px;
+        margin: 24px 0 4px;
+      }
+      a {
+        color: var(--accent);
+      }
+      .lead {
+        color: var(--muted);
+        margin: 0 0 16px;
+      }
+      .open {
+        display: inline-block;
+        margin: 8px 0;
+        padding: 8px 16px;
+        border-radius: 6px;
+        background: var(--accent);
+        color: var(--bg);
+        text-decoration: none;
+        font-weight: 600;
+      }
+      kbd,
+      code {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 0.9em;
+        padding: 1px 5px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--panel);
+        overflow-wrap: anywhere;
+      }
+      pre {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 12px;
+        overflow-x: auto;
+      }
+      pre code {
+        border: 0;
+        padding: 0;
+      }
+      .table-wrap {
+        overflow-x: auto;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        margin: 8px 0;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 6px 10px;
+        border-bottom: 1px solid var(--border);
+      }
+      th {
+        white-space: nowrap;
+      }
+      td:first-child {
+        white-space: nowrap;
+      }
+      .note {
+        background: var(--panel);
+        border-left: 4px solid var(--accent);
+        padding: 8px 12px;
+        border-radius: 4px;
+      }
+      ol li,
+      ul li {
+        margin: 4px 0;
+      }
+      footer {
+        margin-top: 48px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>null-term 使い方</h1>
+      <p class="lead">パソコン通信用の 2 画面シリアルターミナルを、ブラウザだけで動かせる版です。インストールは要りません。</p>
+      <a class="open" href="./">null-term を開く</a>
+
+      <h2>必要なもの</h2>
+      <ul>
+        <li><strong>ブラウザ</strong>: Chrome / Edge などの Chromium 系 (デスクトップ)。Safari / Firefox は Web Serial に対応していません</li>
+        <li><strong>つなぐ相手</strong> (どちらか)
+          <ul>
+            <li>USB で挿すシリアル機器: USB-UART 変換ケーブルの先のモデム、Arduino、ESP32、M5Stack など</li>
+            <li>機器がなければ <a href="https://github.com/GOROman/null-bbs">null-bbs</a> (パソコン通信のホスト局) に WebSocket で直接つなげます → <a href="#bbs">機器なしで試す</a></li>
+          </ul>
+        </li>
+      </ul>
+
+      <h2>画面の見かた</h2>
+      <p>画面は上 (A) と下 (B) に分かれた、<strong>独立した 2 台の端末</strong>です。下はログではありません。A と B にそれぞれ別の回線をつなげます (モデム 2 台を疑似交換機でつないで、A から B に電話をかける使い方を想定しています)。</p>
+      <ul>
+        <li>各画面の一番上の行に、接続状態 (● 接続 / ○ 未接続)・ポート・bps・データ形式・文字コード・送受信バイト数が出ます</li>
+        <li>操作するのは <code>▶</code> が付いている画面です。<kbd>Ctrl-A</kbd> <kbd>Tab</kbd> で切り替えます</li>
+        <li>1 画面で使うときは <kbd>Ctrl-A</kbd> <kbd>z</kbd> で、今の画面を全体に広げられます</li>
+      </ul>
+
+      <h2>操作の基本: Ctrl-A のあとにキー</h2>
+      <p>キー入力はそのまま相手に送られます。null-term 自体の操作は、<kbd>Ctrl-A</kbd> を押して離してから、続けてもう 1 つキーを押します。例えば <kbd>Ctrl-A</kbd> → <kbd>?</kbd> でヘルプが出ます。</p>
+
+      <h2 id="serial">シリアル機器につなぐ</h2>
+      <ol>
+        <li>機器を USB で挿してから null-term を開く</li>
+        <li><kbd>Ctrl-A</kbd> <kbd>p</kbd> でポート選択を開き、<strong>「＋ 新しいポートを許可する…」</strong> で Enter</li>
+        <li>ブラウザのダイアログで機器を選んで「接続」</li>
+        <li>必要なら <kbd>Ctrl-A</kbd> <kbd>b</kbd> で bps を合わせる (モデムは 2400 や 9600、マイコンは 115200 が多い)</li>
+      </ol>
+      <p>一度許可したポートは次回からポート選択の一覧に出ます。前回開いたポート・bps・データ形式は、次に開いたとき自動で開き直します。</p>
+      <p class="note">
+        モデム以外の機器では、URL に <code>?noprobe</code> を付けて開いてください。既定では接続時にモデム名を調べるため <code>ATI3</code> を送ります。<br />
+        例: <a href="./?noprobe&amp;baud=115200"><code>?noprobe&amp;baud=115200</code></a>
+      </p>
+
+      <h3>モデムでの例</h3>
+      <pre><code>ATI3            モデム名の確認 (接続時にも自動で送ります)
+ATDT0           発信 (疑似交換機なら番号は何でもよい)
+ATA             着信に応答
+Ctrl-A H        DTR を落として回線を切る</code></pre>
+
+      <h2 id="bbs">機器なしで試す (null-bbs に接続)</h2>
+      <p>モデムがなくても、パソコン通信のホスト局 <a href="https://github.com/GOROman/null-bbs">null-bbs</a> を手元で動かせば、ブラウザからそのまま BBS につなげます。</p>
+      <ol>
+        <li>null-bbs を用意して起動する (Rust が必要)
+          <pre><code>git clone https://github.com/GOROman/null-bbs
+cd null-bbs
+cargo build --release
+cp config.example.toml null-bbs.toml
+./target/release/null-bbs</code></pre>
+        </li>
+        <li><a href="./?a=ws://127.0.0.1:5657"><strong>このリンク</strong></a> で null-term を開く (<code>?a=ws://127.0.0.1:5657</code> で上の画面がつながります)</li>
+        <li>Chrome が「ローカル ネットワーク上のデバイスへのアクセス」の許可を求めてきたら<strong>許可</strong>する (許可するまで「接続中」のまま止まります)</li>
+        <li>バナーが出たら <code>NEW</code> で会員登録、または <code>GUEST</code> でゲストとして入る</li>
+      </ol>
+      <ul>
+        <li>ポート選択 (<kbd>Ctrl-A</kbd> <kbd>p</kbd>) で <code>ws://</code> の URL を選ぶか、直接打ち込んでも接続できます</li>
+        <li>上下両方をつなぐ (<a href="./?a=ws://127.0.0.1:5657&amp;b=ws://127.0.0.1:5657"><code>?a=…&amp;b=…</code></a>) と、2 人分の会員としてチャットや電報を試せます</li>
+        <li>BBS から <code>BYE</code> で抜けると切断され、自動では掛け直しません。<kbd>Ctrl-A</kbd> <kbd>r</kbd> で再接続します</li>
+      </ul>
+
+      <h2>キー操作 (Ctrl-A のあとに押す)</h2>
+      <div class="table-wrap">
+        <table>
+          <tr><th>キー</th><th>動作</th></tr>
+          <tr><td><kbd>Tab</kbd> / <kbd>o</kbd> / <kbd>↑</kbd><kbd>↓</kbd></td><td>上下画面の切替</td></tr>
+          <tr><td><kbd>1</kbd> / <kbd>2</kbd></td><td>A (上) / B (下) を選択</td></tr>
+          <tr><td><kbd>p</kbd></td><td>ポート選択・接続 (新しいポートの許可、ws:// の直接入力もここ)</td></tr>
+          <tr><td><kbd>b</kbd></td><td>bps 設定 (一覧から選ぶか数字で任意値)</td></tr>
+          <tr><td><kbd>r</kbd> / <kbd>x</kbd></td><td>再接続 / 切断</td></tr>
+          <tr><td><kbd>H</kbd></td><td>DTR を一瞬落としてモデムの回線を切る (WebSocket では切断)</td></tr>
+          <tr><td><kbd>i</kbd></td><td>モデム名を取得 (ATI3)</td></tr>
+          <tr><td><kbd>u</kbd> / <kbd>d</kbd></td><td>ファイル送信 / 受信 (XMODEM / XMODEM-1K / YMODEM)</td></tr>
+          <tr><td><kbd>e</kbd></td><td>文字コード切替 (SJIS / UTF-8 / EUC-JP / JIS)</td></tr>
+          <tr><td><kbd>n</kbd></td><td>Enter で送る改行 (CR / CRLF / LF)</td></tr>
+          <tr><td><kbd>h</kbd></td><td>BackSpace を BS / DEL で切替</td></tr>
+          <tr><td><kbd>l</kbd></td><td>ローカルエコー</td></tr>
+          <tr><td><kbd>L</kbd></td><td>受信ログの記録 開始 / 停止 (停止するとダウンロード)</td></tr>
+          <tr><td><kbd>c</kbd></td><td>画面消去</td></tr>
+          <tr><td><kbd>z</kbd></td><td>今の画面を最大化 / 戻す</td></tr>
+          <tr><td><kbd>[</kbd> / <kbd>PgUp</kbd></td><td>スクロールバック (Esc で戻る)</td></tr>
+          <tr><td><kbd>Ctrl-A</kbd></td><td>0x01 そのものを送る</td></tr>
+          <tr><td><kbd>?</kbd></td><td>ヘルプ</td></tr>
+        </table>
+      </div>
+
+      <h2>ファイル転送</h2>
+      <ul>
+        <li><strong>送信</strong>: <kbd>Ctrl-A</kbd> <kbd>u</kbd> → ←→ でプロトコルを選んで Enter → ファイル選択ダイアログで選ぶ (YMODEM は複数可)</li>
+        <li><strong>受信</strong>: <kbd>Ctrl-A</kbd> <kbd>d</kbd> → プロトコルを選んで Enter。受け取ったファイルはブラウザのダウンロードに保存されます (XMODEM は入力欄の名前で保存)</li>
+        <li>転送中は画面の最下行に進み具合が出ます。<kbd>Esc</kbd> で中止します</li>
+        <li>相手側で送信 / 受信を始めてから (BBS なら「受信を始めてください」と出てから) 操作してください</li>
+      </ul>
+
+      <h2>日本語の入力と貼り付け</h2>
+      <ul>
+        <li>IME でそのまま日本語を入力できます。確定した文字列が送られます</li>
+        <li>貼り付け (<kbd>⌘V</kbd> / <kbd>Ctrl-V</kbd>) もそのまま送れます</li>
+        <li>文字化けしたら <kbd>Ctrl-A</kbd> <kbd>e</kbd> で文字コードを切り替えてください (昔のパソコン通信は SJIS、null-bbs は UTF-8。null-bbs につなぐと自動で UTF-8 になります)</li>
+      </ul>
+
+      <h2>URL で既定値を変える</h2>
+      <p>URL の <code>?</code> 以降で、起動時の設定を変えられます。<code>&amp;</code> でつないで複数指定できます。</p>
+      <div class="table-wrap">
+        <table>
+          <tr><th>指定</th><th>内容</th><th>既定</th></tr>
+          <tr><td><code>a=</code> / <code>b=</code></td><td>その画面の接続先 (<code>ws://…</code>)</td><td>前回の接続先</td></tr>
+          <tr><td><code>baud=</code></td><td>bps</td><td>9600</td></tr>
+          <tr><td><code>enc=</code></td><td>文字コード: sjis / utf8 / eucjp / jis</td><td>sjis</td></tr>
+          <tr><td><code>newline=</code></td><td>Enter で送る改行: cr / crlf / lf</td><td>cr</td></tr>
+          <tr><td><code>flow=</code></td><td>フロー制御: none / rts</td><td>none</td></tr>
+          <tr><td><code>del</code></td><td>BackSpace で DEL (0x7F) を送る</td><td>BS (0x08)</td></tr>
+          <tr><td><code>echo</code></td><td>ローカルエコーを有効にする</td><td>無効</td></tr>
+          <tr><td><code>noprobe</code></td><td>接続時に ATI3 を送らない</td><td>送る</td></tr>
+        </table>
+      </div>
+      <p>例: <a href="./?baud=2400"><code>?baud=2400</code></a> (2400bps モデム)、<a href="./?noprobe&amp;baud=115200&amp;enc=utf8"><code>?noprobe&amp;baud=115200&amp;enc=utf8</code></a> (マイコン)</p>
+
+      <h2>できないこと・注意</h2>
+      <ul>
+        <li>Ctrl-W / Ctrl-T / Ctrl-N などブラウザが先に取るキーは送れません</li>
+        <li>フロー制御は none / rts (RTS/CTS) のみです。XON/XOFF は Web Serial にありません</li>
+        <li>bps やデータ形式を変えると、ポートを開き直します</li>
+        <li>ターミナル版にある外部操作 (<code>null-term ctl</code>) はありません</li>
+        <li>タブを閉じると接続は切れます</li>
+      </ul>
+
+      <footer>
+        <a href="https://github.com/kexi/null-term">kexi/null-term</a> ·
+        fork 元: <a href="https://github.com/GOROman/null-term">GOROman/null-term</a> ·
+        <a href="LICENSE.txt">MIT License</a> ·
+        <a href="THIRD-PARTY-LICENSES.html">サードパーティライセンス</a>
+      </footer>
+    </main>
+  </body>
+</html>

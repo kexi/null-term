@@ -4,9 +4,25 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>null-term</title>
-    <meta name="description" content="パソコン通信用 2 画面シリアルターミナル (Web Serial 版)" />
+    <meta name="description" content="インストール不要、ブラウザだけで動くパソコン通信用 2 画面ターミナル。Web Serial でモデムや USB シリアル機器に、WebSocket で BBS (null-bbs) につながります。XMODEM / YMODEM、SJIS 対応。" />
+    <!-- SNS で共有したときのプレビュー (OGP / Twitter Card)。SNS は相対 URL を解決しないので絶対 URL で書く -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="null-term" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:title" content="null-term — ブラウザで動くパソコン通信ターミナル" />
+    <meta property="og:description" content="インストール不要、ブラウザだけで動くパソコン通信用 2 画面ターミナル。Web Serial でモデムや USB シリアル機器に、WebSocket で BBS (null-bbs) につながります。XMODEM / YMODEM、SJIS 対応。" />
+    <meta property="og:url" content="https://kexi.github.io/null-term/" />
+    <meta property="og:image" content="https://kexi.github.io/null-term/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="null-term の画面: 上下 2 画面で BBS に接続し、掲示板に投稿と返信をしているところ" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="null-term — ブラウザで動くパソコン通信ターミナル" />
+    <meta name="twitter:description" content="インストール不要、ブラウザだけで動くパソコン通信用 2 画面ターミナル。Web Serial でモデムや USB シリアル機器に、WebSocket で BBS (null-bbs) につながります。XMODEM / YMODEM、SJIS 対応。" />
+    <meta name="twitter:image" content="https://kexi.github.io/null-term/og.png" />
     <link data-trunk rel="rust" data-bin="null-term-web" />
     <link data-trunk rel="copy-file" href="usage.html" />
+    <link data-trunk rel="copy-file" href="og.png" />
     <style>
       :root {
         color-scheme: dark;
@@ -39,10 +55,37 @@
         padding: 0;
         resize: none;
       }
-      #term {
+      #main {
         flex: 1;
         min-height: 0;
+        display: flex;
+      }
+      #term {
+        flex: 1;
+        min-width: 0;
         overflow: hidden;
+      }
+      /* 右の使い方パネル (usage.html を埋め込む) */
+      #help {
+        flex: none;
+        width: 400px;
+        max-width: 45vw;
+        border: 0;
+        border-left: 1px solid #333;
+        background: #0e1016;
+      }
+      body.help-hidden #help {
+        display: none;
+      }
+      footer button {
+        font: inherit;
+        color: #e0e0e0;
+        background: #2a2f3a;
+        border: 1px solid #444;
+        border-radius: 4px;
+        padding: 0 8px;
+        margin-right: 6px;
+        cursor: pointer;
       }
       /* ratzilla はセル幅を <pre> で採寸するので、描画と同じフォント・行の高さにする */
       #term pre {
@@ -73,14 +116,46 @@
     </style>
   </head>
   <body>
-    <div id="term"></div>
+    <div id="main">
+      <div id="term"></div>
+      <iframe id="help" src="usage.html" title="null-term の使い方"></iframe>
+    </div>
     <footer>
+      <button id="help-toggle" type="button">使い方を隠す</button>
       null-term Web Serial 版 (Chrome / Edge) ·
-      <a href="usage.html" target="_blank" rel="noopener"><strong>使い方</strong></a> ·
+      <a href="usage.html" target="_blank" rel="noopener">使い方を別タブで開く</a> ·
       <a href="https://github.com/kexi/null-term" target="_blank" rel="noopener">kexi/null-term</a> ·
       fork 元: <a href="https://github.com/GOROman/null-term" target="_blank" rel="noopener">GOROman/null-term</a> ·
       <a href="LICENSE.txt" target="_blank" rel="noopener">MIT License</a> ·
       <a href="THIRD-PARTY-LICENSES.html" target="_blank" rel="noopener">サードパーティライセンス</a>
     </footer>
+    <script>
+      // 使い方パネルの開閉。選んだ状態を覚え、初回は画面が狭ければ閉じておく
+      (() => {
+        const KEY = "null-term.help";
+        const button = document.getElementById("help-toggle");
+        let saved = null;
+        try {
+          saved = localStorage.getItem(KEY);
+        } catch (_) {}
+        const apply = (show) => {
+          document.body.classList.toggle("help-hidden", !show);
+          button.textContent = show ? "使い方を隠す" : "使い方を表示";
+          // ターミナルの幅が変わるので描き直させる
+          window.dispatchEvent(new Event("resize"));
+        };
+        let show = saved === null ? window.innerWidth >= 1100 : saved === "1";
+        apply(show);
+        button.addEventListener("click", (e) => {
+          e.stopPropagation();
+          show = !show;
+          apply(show);
+          try {
+            localStorage.setItem(KEY, show ? "1" : "0");
+          } catch (_) {}
+          document.getElementById("input")?.focus();
+        });
+      })();
+    </script>
   </body>
 </html>

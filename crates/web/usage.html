@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>null-term 使い方</title>
     <meta name="description" content="null-term ブラウザ版 (Web Serial) の使い方" />
+    <!-- SNS で共有したときのプレビュー (OGP / Twitter Card)。SNS は相対 URL を解決しないので絶対 URL で書く -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="null-term" />
+    <meta property="og:locale" content="ja_JP" />
+    <meta property="og:title" content="null-term 使い方" />
+    <meta property="og:description" content="ブラウザで動くパソコン通信ターミナル null-term の使い方。シリアル機器へのつなぎ方、機器なしで BBS (null-bbs) に接続する方法、キー操作、ファイル転送など。" />
+    <meta property="og:url" content="https://kexi.github.io/null-term/usage.html" />
+    <meta property="og:image" content="https://kexi.github.io/null-term/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="null-term の画面: 上下 2 画面で BBS に接続し、掲示板に投稿と返信をしているところ" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="null-term 使い方" />
+    <meta name="twitter:description" content="ブラウザで動くパソコン通信ターミナル null-term の使い方。シリアル機器へのつなぎ方、機器なしで BBS (null-bbs) に接続する方法、キー操作、ファイル転送など。" />
+    <meta name="twitter:image" content="https://kexi.github.io/null-term/og.png" />
     <style>
       :root {
         color-scheme: light dark;
@@ -126,6 +141,23 @@
         margin-top: 48px;
         color: var(--muted);
         font-size: 13px;
+      }
+      /* null-term の右パネルに埋め込まれたとき */
+      .embedded body {
+        font-size: 13px;
+      }
+      .embedded main {
+        padding: 12px 14px 40px;
+      }
+      .embedded h1 {
+        font-size: 20px;
+      }
+      .embedded h2 {
+        font-size: 16px;
+        margin-top: 28px;
+      }
+      .embedded .open {
+        display: none;
       }
     </style>
   </head>
@@ -269,5 +301,18 @@ cp config.example.toml null-bbs.toml
         <a href="THIRD-PARTY-LICENSES.html">サードパーティライセンス</a>
       </footer>
     </main>
+    <script>
+      // null-term の右パネルに埋め込まれたときは、リンクの開き先を振り分ける
+      // (ページ内の見出しはパネル内、null-term を開き直すリンクはページ全体、外部リンクは新しいタブ)
+      if (window.self !== window.top) {
+        document.documentElement.classList.add("embedded");
+        for (const a of document.querySelectorAll("a[href]")) {
+          const href = a.getAttribute("href");
+          if (href.startsWith("#")) continue;
+          a.target = href.startsWith("./") ? "_top" : "_blank";
+          if (a.target === "_blank") a.rel = "noopener";
+        }
+      }
+    </script>
   </body>
 </html>

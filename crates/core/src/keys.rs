@@ -1,12 +1,49 @@
-//! キー入力 → 送信バイト列の変換
-
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+//! キー入力と、送信バイト列への変換
+//!
+//! crossterm (native) とブラウザの KeyboardEvent の両方から変換できるよう、独自のキー型を持つ。
 
 use crate::channel::Channel;
 
-pub fn key_to_bytes(k: &KeyEvent, ch: &Channel) -> Option<Vec<u8>> {
-    let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-    let alt = k.modifiers.contains(KeyModifiers::ALT);
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum KeyCode {
+    Char(char),
+    Enter,
+    Backspace,
+    Tab,
+    BackTab,
+    Esc,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    Insert,
+    Delete,
+    PageUp,
+    PageDown,
+    F(u8),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Key {
+    pub code: KeyCode,
+    pub ctrl: bool,
+    pub alt: bool,
+}
+
+impl Key {
+    pub fn new(code: KeyCode) -> Self {
+        Key { code, ctrl: false, alt: false }
+    }
+
+    pub fn is_ctrl(&self, c: char) -> bool {
+        self.ctrl && matches!(self.code, KeyCode::Char(k) if k.eq_ignore_ascii_case(&c))
+    }
+}
+
+pub fn key_to_bytes(k: &Key, ch: &Channel) -> Option<Vec<u8>> {
+    let (ctrl, alt) = (k.ctrl, k.alt);
     let seq: &[u8] = match k.code {
         KeyCode::Char(c) => {
             let mut out = Vec::new();
@@ -62,7 +99,6 @@ pub fn key_to_bytes(k: &KeyEvent, ch: &Channel) -> Option<Vec<u8>> {
             12 => b"\x1b[24~",
             _ => return None,
         },
-        _ => return None,
     };
     Some(seq.to_vec())
 }

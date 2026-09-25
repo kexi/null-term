@@ -1,0 +1,13 @@
+[package]
+name = "null-term-core"
+description = "null-term の画面・チャンネル・ファイル転送 (native / wasm 共通部分)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+encoding_rs.workspace = true
+ratatui.workspace = true
+vt100.workspace = true
+web-time.workspace = true

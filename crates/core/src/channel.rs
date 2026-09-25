@@ -1,19 +1,15 @@
 //! 1 チャンネル分のシリアルポート + VT100 画面。
+//!
+//! ポートの実体は `Host` が作る `Link` で、受信データは `handle_event` で受け取る。
 
-use std::fs::File;
-use std::path::PathBuf;
-use std::io::{Read, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::io::Write;
 
 use anyhow::{bail, Context, Result};
 use encoding_rs::{Decoder, Encoding, EUC_JP, ISO_2022_JP, SHIFT_JIS, UTF_8};
-use serialport::{DataBits, FlowControl, Parity, SerialPort, StopBits};
+use web_time::{Duration, Instant};
 
-use crate::transfer::{Outcome, Protocol, Transfer};
+use crate::host::{Host, Link, SerialEvent};
+use crate::transfer::{FileSink, Outcome, Protocol, SendFile, Transfer};
 
 pub const BAUD_RATES: &[u32] = &[
     300, 1200, 2400, 4800, 9600, 14400, 19200, 38400, 57600, 115200, 230400, 460800, 921600,
@@ -25,11 +21,6 @@ const SCROLLBACK: usize = 5000;
 const KNOWN_MODEMS: &[(&str, &str)] = &[("330", "AIWA PV-PF24MK2")];
 /// 外部制御の wait 用に保持する受信テキストの上限
 const RX_TEXT_MAX: usize = 256 * 1024;
-
-pub enum SerialEvent {
-    Data { ch: usize, generation: u64, data: Vec<u8> },
-    Error { ch: usize, generation: u64, msg: String },
-}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Newline {
@@ -94,30 +85,52 @@ pub fn encoding_label(enc: &'static Encoding) -> &'static str {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Parity {
+    None,
+    Even,
+    Odd,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Flow {
+    None,
+    /// XON / XOFF
+    Software,
+    /// RTS / CTS
+    Hardware,
+}
+
+impl Flow {
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(match s.to_ascii_lowercase().as_str() {
+            "none" | "no" => Flow::None,
+            "xon" | "soft" | "sw" => Flow::Software,
+            "rts" | "hard" | "hw" => Flow::Hardware,
+            _ => bail!("flow は none / xon / rts のいずれか: {s}"),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PortConfig {
     pub path: Option<String>,
     pub baud: u32,
-    pub data_bits: DataBits,
+    /// 5〜8
+    pub data_bits: u8,
     pub parity: Parity,
-    pub stop_bits: StopBits,
-    pub flow: FlowControl,
+    /// 1 または 2
+    pub stop_bits: u8,
+    pub flow: Flow,
 }
 
 impl PortConfig {
-    pub fn empty(baud: u32, flow: FlowControl) -> Self {
-        PortConfig {
-            path: None,
-            baud,
-            data_bits: DataBits::Eight,
-            parity: Parity::None,
-            stop_bits: StopBits::One,
-            flow,
-        }
+    pub fn empty(baud: u32, flow: Flow) -> Self {
+        PortConfig { path: None, baud, data_bits: 8, parity: Parity::None, stop_bits: 1, flow }
     }
 
     /// `PATH[:BAUD[:FMT]]` 形式 (例: `/dev/cu.usbserial-XXXX:9600:8N1`)
-    pub fn parse(spec: &str, default_baud: u32, flow: FlowControl) -> Result<Self> {
+    pub fn parse(spec: &str, default_baud: u32, flow: Flow) -> Result<Self> {
         let mut cfg = PortConfig::empty(default_baud, flow);
         let mut parts = spec.split(':');
         let path = parts.next().unwrap_or_default();
@@ -143,10 +156,7 @@ impl PortConfig {
             bail!("FMT は 8N1 のような 3 文字: {f}");
         }
         self.data_bits = match b[0] {
-            b'5' => DataBits::Five,
-            b'6' => DataBits::Six,
-            b'7' => DataBits::Seven,
-            b'8' => DataBits::Eight,
+            b'5'..=b'8' => b[0] - b'0',
             _ => bail!("データビットが不正: {f}"),
         };
         self.parity = match b[1].to_ascii_uppercase() {
@@ -156,50 +166,25 @@ impl PortConfig {
             _ => bail!("パリティが不正: {f}"),
         };
         self.stop_bits = match b[2] {
-            b'1' => StopBits::One,
-            b'2' => StopBits::Two,
+            b'1' | b'2' => b[2] - b'0',
             _ => bail!("ストップビットが不正: {f}"),
         };
         Ok(())
     }
 
     pub fn format_label(&self) -> String {
-        let d = match self.data_bits {
-            DataBits::Five => '5',
-            DataBits::Six => '6',
-            DataBits::Seven => '7',
-            DataBits::Eight => '8',
-        };
         let p = match self.parity {
             Parity::None => 'N',
             Parity::Even => 'E',
             Parity::Odd => 'O',
         };
-        let s = match self.stop_bits {
-            StopBits::One => '1',
-            StopBits::Two => '2',
-        };
         let flow = match self.flow {
-            FlowControl::None => "",
-            FlowControl::Software => " XON",
-            FlowControl::Hardware => " RTS",
+            Flow::None => "",
+            Flow::Software => " XON",
+            Flow::Hardware => " RTS",
         };
-        format!("{d}{p}{s}{flow}")
+        format!("{}{p}{}{flow}", self.data_bits, self.stop_bits)
     }
-}
-
-#[cfg(unix)]
-fn open_raw(path: &str) -> serialport::Result<Box<dyn SerialPort>> {
-    use std::os::fd::{FromRawFd, IntoRawFd};
-    let file = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
-    let mut port = unsafe { serialport::TTYPort::from_raw_fd(file.into_raw_fd()) };
-    port.set_timeout(Duration::from_millis(50))?;
-    Ok(Box::new(port))
-}
-
-#[cfg(not(unix))]
-fn open_raw(path: &str) -> serialport::Result<Box<dyn SerialPort>> {
-    Err(serialport::Error::new(serialport::ErrorKind::NoDevice, path))
 }
 
 pub struct Channel {
@@ -227,15 +212,16 @@ pub struct Channel {
     probe: Option<(usize, Instant)>,
     /// I/O エラー後の自動再接続 (次に試す時刻, 試行回数)
     reconnect: Option<(Instant, u32)>,
+    /// 自動再接続で開いている途中 (試行回数)。非同期に開くホストで失敗したら再試行する
+    reopening: Option<u32>,
     /// XMODEM / YMODEM 転送中
     pub transfer: Option<Transfer>,
     /// 直前の転送結果 (成功, メッセージ)
     pub transfer_result: Option<(bool, String)>,
     decoder: Decoder,
-    writer: Option<Box<dyn SerialPort>>,
-    stop: Option<Arc<AtomicBool>>,
+    writer: Option<Box<dyn Link>>,
     generation: u64,
-    log: Option<File>,
+    log: Option<Box<dyn Write>>,
 }
 
 impl Channel {
@@ -259,11 +245,11 @@ impl Channel {
             auto_probe: true,
             probe: None,
             reconnect: None,
+            reopening: None,
             transfer: None,
             transfer_result: None,
             decoder: encoding.new_decoder_without_bom_handling(),
             writer: None,
-            stop: None,
             generation: 0,
             log: None,
         }
@@ -278,73 +264,29 @@ impl Channel {
     }
 
     /// ユーザー操作でポートを開く (自動再接続は解除)
-    pub fn open(&mut self, tx: &Sender<SerialEvent>) {
+    pub fn open(&mut self, host: &dyn Host) {
         self.reconnect = None;
-        self.open_port(tx, self.auto_probe);
+        self.reopening = None;
+        self.open_port(host, self.auto_probe);
     }
 
-    fn open_port(&mut self, tx: &Sender<SerialEvent>, probe: bool) {
+    fn open_port(&mut self, host: &dyn Host, probe: bool) {
         self.close_port();
-        let Some(path) = self.cfg.path.clone() else {
+        if self.cfg.path.is_none() {
             self.status = "未接続 (Ctrl-A p でポート選択)".into();
             return;
-        };
-        let result = serialport::new(&path, self.cfg.baud)
-            .data_bits(self.cfg.data_bits)
-            .parity(self.cfg.parity)
-            .stop_bits(self.cfg.stop_bits)
-            .flow_control(self.cfg.flow)
-            .timeout(Duration::from_millis(50))
-            .open();
-        // pty など bps 設定を受け付けないデバイスは素の fd として開き直す
-        let mut note = "";
-        let result = match result {
-            Err(e) => match open_raw(&path) {
-                Ok(p) => {
-                    note = " (bps 設定なし)";
-                    Ok(p)
-                }
-                Err(_) => Err(e),
-            },
-            ok => ok,
         }
-        .and_then(|p| p.try_clone().map(|r| (p, r)));
-        let (writer, mut reader) = match result {
-            Ok(v) => v,
+        // 古い reader からのイベントと区別するため、開くたびに世代を進める
+        self.generation += 1;
+        let opened = match host.open(self.index, self.generation, &self.cfg) {
+            Ok(o) => o,
             Err(e) => {
                 self.status = format!("オープン失敗: {e}");
                 return;
             }
         };
-        self.generation += 1;
-        let generation = self.generation;
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop2 = stop.clone();
-        let tx = tx.clone();
-        let ch = self.index;
-        thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            while !stop2.load(Ordering::Relaxed) {
-                match reader.read(&mut buf) {
-                    Ok(0) => {}
-                    Ok(n) => {
-                        let data = buf[..n].to_vec();
-                        if tx.send(SerialEvent::Data { ch, generation, data }).is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-                    Err(e) => {
-                        let _ = tx.send(SerialEvent::Error { ch, generation, msg: e.to_string() });
-                        break;
-                    }
-                }
-            }
-        });
-        self.writer = Some(writer);
-        self.stop = Some(stop);
-        self.status = format!("接続中{note}");
+        self.writer = Some(opened.link);
+        self.status = format!("接続中{}", opened.note);
         if probe {
             self.modem = None;
             self.probe_modem();
@@ -369,29 +311,31 @@ impl Channel {
     }
 
     /// 自動再接続の時刻が来ていれば開き直す。状態が変わったら true
-    pub fn poll_reconnect(&mut self, tx: &Sender<SerialEvent>) -> bool {
+    pub fn poll_reconnect(&mut self, host: &dyn Host) -> bool {
         let Some((at, tries)) = self.reconnect else { return false };
         if Instant::now() < at {
             return false;
         }
         // 再接続ではモデム名を問い合わせない (通信中の相手に ATI3 が飛ぶのを避ける)
-        self.open_port(tx, false);
+        self.open_port(host, false);
         if self.is_open() {
             self.reconnect = None;
+            self.reopening = Some(tries);
             self.status = format!("自動再接続しました ({} 回目)", tries + 1);
         } else {
-            let reason = std::mem::take(&mut self.status);
-            self.reconnect = Some((Instant::now() + Duration::from_secs(2), tries + 1));
-            self.status = format!("{reason} → 再接続を再試行中 ({} 回目)", tries + 1);
+            self.retry_reconnect(tries);
         }
         true
     }
 
+    fn retry_reconnect(&mut self, tries: u32) {
+        let reason = std::mem::take(&mut self.status);
+        self.reconnect = Some((Instant::now() + Duration::from_secs(2), tries + 1));
+        self.status = format!("{reason} → 再接続を再試行中 ({} 回目)", tries + 1);
+    }
+
     fn close_port(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            stop.store(true, Ordering::Relaxed);
-        }
-        // 古い reader スレッドからのイベントを無視するため世代を進める
+        // 古い reader からのイベントを無視するため世代を進める
         self.generation += 1;
         if let Some(t) = self.transfer.take() {
             let msg = format!("{} {}失敗: ポートが閉じられました", t.protocol.label(), t.direction.label());
@@ -402,24 +346,21 @@ impl Channel {
         }
     }
 
-    pub fn set_baud(&mut self, baud: u32) {
+    pub fn set_baud(&mut self, baud: u32, host: &dyn Host) {
         self.cfg.baud = baud;
-        if let Some(w) = self.writer.as_mut() {
-            if let Err(e) = w.set_baud_rate(baud) {
-                self.status = format!("bps 変更失敗: {e}");
-            }
+        let Some(w) = self.writer.as_mut() else { return };
+        match w.set_baud(baud) {
+            Some(Ok(())) => {}
+            Some(Err(e)) => self.status = format!("bps 変更失敗: {e}"),
+            // 開いたまま変えられないポートは開き直す (ATI3 は送らない)
+            None => self.open_port(host, false),
         }
     }
 
     /// DTR を一旦落としてモデムに回線を切らせる (&D2 の場合)
     pub fn hangup(&mut self) {
         let Some(w) = self.writer.as_mut() else { return };
-        let result = w
-            .write_data_terminal_ready(false)
-            .and_then(|_| {
-                std::thread::sleep(Duration::from_millis(600));
-                w.write_data_terminal_ready(true)
-            });
+        let result = w.pulse_dtr();
         self.status = match result {
             Ok(()) => "DTR OFF で切断".into(),
             Err(e) => format!("DTR 制御失敗: {e}"),
@@ -445,6 +386,10 @@ impl Channel {
 
     /// SerialEvent を受け取った時の処理。自チャンネル宛てで世代が一致するものだけ処理する。
     pub fn handle_event(&mut self, ev: SerialEvent) {
+        if matches!(ev, SerialEvent::Data { .. }) {
+            // 受信できたので、自動再接続で開いたポートは開けている
+            self.reopening = None;
+        }
         match ev {
             SerialEvent::Data { generation, data, .. } if generation == self.generation => {
                 self.rx_bytes += data.len() as u64;
@@ -462,6 +407,13 @@ impl Channel {
             }
             SerialEvent::Error { generation, msg, .. } if generation == self.generation => {
                 self.fail(format!("エラー: {msg}"));
+            }
+            SerialEvent::OpenFailed { generation, msg, .. } if generation == self.generation => {
+                self.close_port();
+                self.status = format!("オープン失敗: {msg}");
+                if let Some(tries) = self.reopening.take() {
+                    self.retry_reconnect(tries);
+                }
             }
             _ => {}
         }
@@ -563,34 +515,17 @@ impl Channel {
         self.write_raw(&bytes);
     }
 
-    /// ローカルエコーなしで送信する。書き込みのタイムアウトは待ち続け、10 秒進まなければエラー
+    /// ローカルエコーなしで送信する
     fn write_bytes(&mut self, bytes: &[u8]) -> bool {
         if bytes.is_empty() {
             return true;
         }
         let Some(w) = self.writer.as_mut() else { return false };
-        let mut rest = bytes;
-        let mut last_progress = Instant::now();
-        let result = loop {
-            if rest.is_empty() {
-                break w.flush();
+        match w.write(bytes) {
+            Ok(()) => {
+                self.tx_bytes += bytes.len() as u64;
+                true
             }
-            match w.write(rest) {
-                Ok(n) if n > 0 => {
-                    rest = &rest[n..];
-                    last_progress = Instant::now();
-                }
-                Ok(_) => {}
-                Err(e) if matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::Interrupted) => {}
-                Err(e) => break Err(e),
-            }
-            if last_progress.elapsed() > Duration::from_secs(10) {
-                break Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "送信が進みません"));
-            }
-        };
-        self.tx_bytes += (bytes.len() - rest.len()) as u64;
-        match result {
-            Ok(()) => true,
             Err(e) => {
                 self.fail(format!("送信エラー: {e}"));
                 false
@@ -622,7 +557,7 @@ impl Channel {
     }
 
     /// XMODEM / YMODEM 送信を始める
-    pub fn start_upload(&mut self, protocol: Protocol, files: Vec<PathBuf>) -> Result<()> {
+    pub fn start_upload(&mut self, protocol: Protocol, files: Vec<SendFile>) -> Result<()> {
         self.check_can_transfer()?;
         let t = Transfer::send(protocol, files, Instant::now())?;
         self.status = format!("{} 送信中", protocol.label());
@@ -630,10 +565,10 @@ impl Channel {
         Ok(())
     }
 
-    /// XMODEM / YMODEM 受信を始める (`dest` は XMODEM ならファイル名、YMODEM ならディレクトリ)
-    pub fn start_download(&mut self, protocol: Protocol, dest: PathBuf) -> Result<()> {
+    /// XMODEM / YMODEM 受信を始める
+    pub fn start_download(&mut self, protocol: Protocol, sink: Box<dyn FileSink>) -> Result<()> {
         self.check_can_transfer()?;
-        let (t, out) = Transfer::recv(protocol, dest, Instant::now())?;
+        let (t, out) = Transfer::recv(protocol, sink, Instant::now());
         self.status = format!("{} 受信中", protocol.label());
         self.transfer = Some(t);
         self.write_bytes(&out);
@@ -681,23 +616,19 @@ impl Channel {
         true
     }
 
-    pub fn toggle_log(&mut self) {
-        if self.log.take().is_some() {
+    pub fn toggle_log(&mut self, host: &dyn Host) {
+        if let Some(mut log) = self.log.take() {
+            let _ = log.flush();
             self.status = format!("ログ停止: {}", self.log_path.take().unwrap_or_default());
             return;
         }
-        let path = format!(
-            "null-term-{}-{}.log",
-            self.name(),
-            chrono::Local::now().format("%Y%m%d-%H%M%S")
-        );
-        match File::create(&path) {
-            Ok(f) => {
+        match host.create_log(self.name()) {
+            Ok((f, path)) => {
                 self.log = Some(f);
                 self.status = format!("ログ記録中: {path}");
                 self.log_path = Some(path);
             }
-            Err(e) => self.status = format!("ログ作成失敗: {e}"),
+            Err(e) => self.status = format!("ログ作成失敗: {e:#}"),
         }
     }
 

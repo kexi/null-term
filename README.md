@@ -28,6 +28,32 @@ cargo build --release
 | `--headless` | | 画面なしで起動 (外部操作専用) |
 | `-s, --socket` | | 外部操作ソケットのパス |
 
+## ブラウザ版（Web Serial）
+
+同じ画面・キー操作・XMODEM / YMODEM を、ブラウザの Web Serial API で動かせます。インストールは要りません。
+
+**https://kexi.github.io/null-term/** （Chrome / Edge などの Chromium 系ブラウザ。Safari / Firefox は Web Serial 非対応）
+
+- `Ctrl-A p` のポート選択で「＋ 新しいポートを許可する…」を選ぶと、ブラウザのダイアログからポートを許可できます。許可したポートは次回から一覧に出て、前回開いたポート・bps・データ形式は自動で開き直します
+- 起動時の既定値は URL で変えられます: `?baud=2400&enc=sjis&newline=cr&flow=rts&del&echo&noprobe`
+- ファイル送信はファイル選択ダイアログ、受信したファイルと受信ログ（`Ctrl-A L` で停止した時）はブラウザのダウンロードに保存されます
+- 日本語は IME で入力でき、貼り付け（⌘V / Ctrl-V）もそのまま送れます
+- CLI 版との違い
+  - `null-term ctl` による外部操作はできません
+  - フロー制御は none / rts のみ（XON/XOFF は Web Serial にないため）
+  - bps やデータ形式を変えるとポートを開き直します
+  - Ctrl-W / Ctrl-T / Ctrl-N などブラウザが先に取るキーは送れません
+
+手元でビルドする場合（`nix develop` か direnv で wasm32 ターゲットと trunk が入ります）:
+
+```
+cd crates/web
+trunk serve        # http://127.0.0.1:8080/ で確認
+trunk build --release
+```
+
+構成: `crates/core`（画面・VT100・キー操作・転送。native / wasm 共通）、`crates/cli`（serialport + crossterm の CLI 版）、`crates/web`（Web Serial + ratzilla のブラウザ版）。
+
 ## キー操作（Ctrl-A のあとに押す）
 
 | キー | 動作 |

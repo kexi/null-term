@@ -7,9 +7,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
+use crate::app::{App, Mode, Popup};
 use crate::channel::{encoding_label, Channel, BAUD_RATES};
+use crate::host::Host;
 use crate::transfer::{Direction, Protocol, Transfer};
-use crate::{App, Mode, Popup};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let [main, status] = Layout::vertical([Constraint::Min(2), Constraint::Length(1)]).areas(f.area());
@@ -48,7 +49,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(Paragraph::new(status_line(app)).style(Style::new().bg(Color::DarkGray)), status);
 
     if let Some(popup) = &app.popup {
-        draw_popup(f, popup, &app.channels[app.active]);
+        draw_popup(f, popup, &app.channels[app.active], &*app.host);
     }
 }
 
@@ -226,7 +227,7 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
-fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel) {
+fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel, host: &dyn Host) {
     let block = |t: String| {
         Block::default()
             .borders(Borders::ALL)
@@ -259,14 +260,18 @@ fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel) {
             };
             f.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Yellow)), input);
         }
-        Popup::Port { ports, sel } => {
-            let area = centered(f.area(), 50, ports.len().max(1) as u16 + 2);
+        Popup::Port { ports, sel, request } => {
+            let rows = ports.len() + usize::from(*request);
+            let area = centered(f.area(), 50, rows.max(1) as u16 + 2);
             f.render_widget(Clear, area);
             let b = block(format!(" {} のポート (Enter で接続) ", ch.name()));
-            if ports.is_empty() {
+            if rows == 0 {
                 f.render_widget(Paragraph::new("シリアルポートが見つかりません").block(b), area);
             } else {
-                let items: Vec<ListItem> = ports.iter().map(|p| ListItem::new(p.as_str())).collect();
+                let mut items: Vec<ListItem> = ports.iter().map(|p| ListItem::new(p.as_str())).collect();
+                if *request {
+                    items.push(ListItem::new("＋ 新しいポートを許可する…").style(Style::new().fg(Color::LightCyan)));
+                }
                 let mut st = ListState::default().with_selected(Some(*sel));
                 f.render_stateful_widget(List::new(items).block(b).highlight_style(hl), area, &mut st);
             }
@@ -283,17 +288,27 @@ fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel) {
                 protos.push(Span::styled(format!(" {} ", p.label()), style));
                 protos.push(Span::raw(" "));
             }
-            let what = match (dir, Protocol::ALL[*proto]) {
-                (Direction::Send, Protocol::Ymodem) => "送るファイル (空白区切りで複数可)",
-                (Direction::Send, _) => "送るファイル",
-                (Direction::Recv, Protocol::Ymodem) => "保存先ディレクトリ",
-                (Direction::Recv, _) => "保存するファイル名",
+            let input = |what: &str| {
+                [Line::raw(format!(" {what}:")), Line::from(Span::styled(format!(" {path}_"), Style::new().fg(Color::Yellow)))]
+            };
+            let [l1, l2] = match (dir, Protocol::ALL[*proto], host.picks_files()) {
+                (Direction::Send, Protocol::Ymodem, true) => {
+                    [Line::raw(" Enter で送るファイルを選択 (複数可)"), Line::raw("")]
+                }
+                (Direction::Send, _, true) => [Line::raw(" Enter で送るファイルを選択"), Line::raw("")],
+                (Direction::Recv, Protocol::Ymodem, true) => {
+                    [Line::raw(" 受信したファイルはブラウザのダウンロードに保存します"), Line::raw("")]
+                }
+                (Direction::Send, Protocol::Ymodem, false) => input("送るファイル (空白区切りで複数可)"),
+                (Direction::Send, _, false) => input("送るファイル"),
+                (Direction::Recv, Protocol::Ymodem, false) => input("保存先ディレクトリ"),
+                (Direction::Recv, _, _) => input("保存するファイル名"),
             };
             let lines = vec![
                 Line::from(protos),
                 Line::raw(""),
-                Line::raw(format!(" {what}:")),
-                Line::from(Span::styled(format!(" {path}_"), Style::new().fg(Color::Yellow))),
+                l1,
+                l2,
                 Line::raw(""),
                 match error {
                     Some(e) => Line::from(Span::styled(format!(" {e}"), Style::new().fg(Color::LightRed))),

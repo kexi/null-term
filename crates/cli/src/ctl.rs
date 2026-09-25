@@ -15,9 +15,11 @@ use clap::Subcommand;
 use regex::Regex;
 use serde_json::{json, Value};
 
-use crate::channel::{self, encoding_label, Channel, Newline};
-use crate::transfer::Protocol;
-use crate::App;
+use null_term_core::channel::{self, encoding_label, Channel, Newline};
+use null_term_core::transfer::Protocol;
+use null_term_core::App;
+
+use crate::host::{expand_path, list_ports, load_files, DiskSink};
 
 pub fn default_socket() -> PathBuf {
     if let Ok(p) = std::env::var("NULL_TERM_SOCK") {
@@ -173,7 +175,6 @@ fn str_arg<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
 fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
     let cmd = str_arg(v, "cmd")?;
     let i = parse_ch(v, app)?;
-    let tx = app.tx.clone();
     let ok = |extra: Value| {
         let mut o = json!({ "ok": true });
         if let (Some(o), Value::Object(e)) = (o.as_object_mut(), extra) {
@@ -181,6 +182,7 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
         }
         Ok(Dispatch::Reply(o))
     };
+    let host = &*app.host;
     let ch = &mut app.channels[i];
     match cmd {
         "status" => {
@@ -230,13 +232,13 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
         }
         "baud" => {
             let baud = v.get("baud").and_then(Value::as_u64).ok_or_else(|| anyhow!("baud が必要です"))?;
-            ch.set_baud(baud as u32);
+            ch.set_baud(baud as u32, host);
             ok(channel_status(app, i))
         }
         "format" => {
             ch.cfg.set_format(str_arg(v, "format")?)?;
             if ch.is_open() {
-                ch.open(&tx);
+                ch.open(host);
             }
             ok(channel_status(app, i))
         }
@@ -247,7 +249,7 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
             if let Some(b) = v.get("baud").and_then(Value::as_u64) {
                 ch.cfg.baud = b as u32;
             }
-            ch.open(&tx);
+            ch.open(host);
             if !ch.is_open() {
                 bail!("{}", ch.status);
             }
@@ -260,9 +262,9 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
                 .and_then(Value::as_array)
                 .ok_or_else(|| anyhow!("files が必要です"))?
                 .iter()
-                .filter_map(|f| f.as_str().map(crate::expand_path))
+                .filter_map(|f| f.as_str().map(expand_path))
                 .collect();
-            ch.start_upload(proto, files)?;
+            ch.start_upload(proto, load_files(&files)?)?;
             ok(transfer_status(ch))
         }
         "download" => {
@@ -272,7 +274,7 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
             if path.is_empty() {
                 bail!("XMODEM は保存するファイル名 (path) が必要です");
             }
-            ch.start_download(proto, crate::expand_path(path))?;
+            ch.start_download(proto, Box::new(DiskSink::new(proto, expand_path(path))?))?;
             ok(transfer_status(ch))
         }
         "transfer" => ok(transfer_status(ch)),
@@ -311,7 +313,7 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
         "log" => {
             let want = v.get("on").and_then(Value::as_bool).unwrap_or(!ch.is_logging());
             if want != ch.is_logging() {
-                ch.toggle_log();
+                ch.toggle_log(host);
             }
             ok(channel_status(app, i))
         }
@@ -330,7 +332,7 @@ fn dispatch(app: &mut App, v: &Value) -> Result<Dispatch> {
             app.active = i;
             ok(json!({}))
         }
-        "ports" => ok(json!({ "ports": crate::list_ports() })),
+        "ports" => ok(json!({ "ports": list_ports() })),
         "quit" => {
             app.quit = true;
             ok(json!({}))
@@ -607,13 +609,13 @@ pub fn client(socket: &Path, cmd: CtlCmd) -> Result<i32> {
             // null-term 本体とカレントディレクトリが違ってもよいよう絶対パスにする
             let files: Vec<String> = files
                 .iter()
-                .map(|f| absolute(&crate::expand_path(f)))
+                .map(|f| absolute(&expand_path(f)))
                 .collect::<Result<_>>()?;
             reqs.push(json!({"cmd": "upload", "ch": ch, "protocol": protocol, "files": files}));
             wait_ch = wait.then_some(ch);
         }
         CtlCmd::Download { ch, path, protocol, wait } => {
-            let path = path.map(|p| absolute(&crate::expand_path(&p))).transpose()?;
+            let path = path.map(|p| absolute(&expand_path(&p))).transpose()?;
             reqs.push(json!({"cmd": "download", "ch": ch, "protocol": protocol, "path": path}));
             wait_ch = wait.then_some(ch);
         }

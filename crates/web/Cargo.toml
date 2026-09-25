@@ -1,0 +1,53 @@
+[package]
+name = "null-term-web"
+description = "null-term のブラウザ版 (Web Serial API)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+null-term-core.workspace = true
+anyhow.workspace = true
+encoding_rs.workspace = true
+ratatui.workspace = true
+ratzilla = "0.3.1"
+console_error_panic_hook = "0.1.7"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+
+# Web Serial は web-sys では unstable 扱いで --cfg=web_sys_unstable_apis が要るが、
+# この cfg は全クレートに効き ratzilla (beamterm) の Canvas API の型まで変わってしまう。
+# そのため Serial 関係は serial.rs で自前に宣言している
+[dependencies.web-sys]
+version = "0.3"
+features = [
+    "Blob",
+    "BlobPropertyBag",
+    "ClipboardEvent",
+    "CompositionEvent",
+    "DataTransfer",
+    "Document",
+    "DomException",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlTextAreaElement",
+    "KeyboardEvent",
+    "Location",
+    "Navigator",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "Storage",
+    "Url",
+    "UrlSearchParams",
+    "Window",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+]

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>null-term</title>
+    <meta name="description" content="パソコン通信用 2 画面シリアルターミナル (Web Serial 版)" />
+    <link data-trunk rel="rust" data-bin="null-term-web" />
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #000;
+        color: #e0e0e0;
+        overflow: hidden;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        /* 罫線 (│┌ など) は日本語フォントだと全角幅で描かれ隣のセルに隠れるので、
+           ASCII と罫線は欧文等幅フォントで描き、かな漢字だけ日本語フォントに任せる */
+        font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", "BIZ UDGothic", "Osaka-Mono", "MS Gothic", "Noto Sans Mono CJK JP", monospace;
+        font-size: 15px;
+      }
+      /* キー入力と IME を受ける見えない textarea */
+      #input {
+        position: fixed;
+        left: 0;
+        top: 0;
+        width: 1px;
+        height: 1px;
+        opacity: 0;
+        border: 0;
+        padding: 0;
+        resize: none;
+      }
+      #term {
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+      }
+      /* ratzilla はセル幅を <pre> で採寸するので、描画と同じフォント・行の高さにする */
+      #term pre {
+        margin: 0;
+        font-family: inherit;
+        line-height: normal;
+      }
+      /* 空白セルは行より低くなり背景に隙間ができるので、行の高さいっぱいにする */
+      #term pre > * {
+        height: 100%;
+        vertical-align: top;
+      }
+      footer {
+        flex: none;
+        padding: 4px 12px;
+        font: 12px/1.4 system-ui, sans-serif;
+        color: #9a9a9a;
+        background: #111;
+        border-top: 1px solid #333;
+      }
+      footer a {
+        color: #7fb4ff;
+      }
+      .message {
+        padding: 16px;
+        font-family: system-ui, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="term"></div>
+    <footer>
+      null-term Web Serial 版 (Chrome / Edge) ·
+      <a href="https://github.com/kexi/null-term" target="_blank" rel="noopener">kexi/null-term</a> ·
+      fork 元: <a href="https://github.com/GOROman/null-term" target="_blank" rel="noopener">GOROman/null-term</a>
+    </footer>
+  </body>
+</html>

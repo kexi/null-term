@@ -1,3 +1,6 @@
 /target
+/crates/web/dist
 # 受信ログ (Ctrl-A L)
 null-term-*.log
+# nix develop (direnv)
+/.direnv

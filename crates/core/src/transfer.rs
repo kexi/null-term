@@ -2,14 +2,14 @@
 //!
 //! シリアル I/O から切り離した状態機械として実装している。
 //! 受信バイトを `input` に、時間経過を `tick` に渡すと、送るべきバイト列を返す。
+//! ファイルの読み書きもしない。送るファイルは `SendFile` で渡し、受信したファイルは `FileSink` に書く
+//! (native はファイルシステム、ブラウザはダウンロードなので実装を差し替える)。
 
 use std::collections::VecDeque;
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use web_time::{Duration, Instant};
 
 const SOH: u8 = 0x01;
 const STX: u8 = 0x02;
@@ -55,6 +55,25 @@ impl Protocol {
             _ => bail!("プロトコルは xmodem / xmodem-1k / ymodem のいずれか: {s}"),
         })
     }
+}
+
+/// 送信するファイル (中身は読み込み済み)
+#[derive(Clone, Debug)]
+pub struct SendFile {
+    pub name: String,
+    pub data: Vec<u8>,
+    /// 更新日時 (UNIX 時刻)。不明なら 0
+    pub mtime: u64,
+}
+
+/// 受信したファイルの保存先
+pub trait FileSink {
+    /// 1 ファイルの保存を始める。`name` は YMODEM で相手が送ってきたファイル名
+    /// (パス区切りは除去済み)、XMODEM では None。保存先の表示名を返す
+    fn create(&mut self, name: Option<&str>) -> Result<String>;
+    fn write(&mut self, data: &[u8]) -> Result<()>;
+    /// 1 ファイル受信し終えた。途中で失敗した場合は呼ばれない
+    fn finish(&mut self) -> Result<()>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -103,17 +122,12 @@ enum Inner {
 }
 
 impl Transfer {
-    pub fn send(protocol: Protocol, files: Vec<PathBuf>, now: Instant) -> Result<Self> {
+    pub fn send(protocol: Protocol, files: Vec<SendFile>, now: Instant) -> Result<Self> {
         if files.is_empty() {
             bail!("送信するファイルを指定してください");
         }
         if protocol != Protocol::Ymodem && files.len() > 1 {
             bail!("{} は 1 ファイルずつしか送れません", protocol.label());
-        }
-        for f in &files {
-            if !f.is_file() {
-                bail!("ファイルがありません: {}", f.display());
-            }
         }
         let mut t = Transfer {
             protocol,
@@ -126,21 +140,9 @@ impl Transfer {
         Ok(t)
     }
 
-    /// `dest`: XMODEM なら保存するファイル名、YMODEM なら保存先ディレクトリ
-    pub fn recv(protocol: Protocol, dest: PathBuf, now: Instant) -> Result<(Self, Vec<u8>)> {
-        match protocol {
-            Protocol::Ymodem => {
-                if !dest.is_dir() {
-                    bail!("保存先ディレクトリがありません: {}", dest.display());
-                }
-            }
-            _ => {
-                if dest.is_dir() {
-                    bail!("XMODEM は保存するファイル名を指定してください: {}", dest.display());
-                }
-            }
-        }
-        let (r, out) = Receiver::new(protocol, dest, now);
+    /// 受信を始める。送信側への開始合図も返す
+    pub fn recv(protocol: Protocol, sink: Box<dyn FileSink>, now: Instant) -> (Self, Vec<u8>) {
+        let (r, out) = Receiver::new(protocol, sink, now);
         let mut t = Transfer {
             protocol,
             direction: Direction::Recv,
@@ -149,7 +151,7 @@ impl Transfer {
             inner: Inner::Recv(r),
         };
         t.sync();
-        Ok((t, out))
+        (t, out)
     }
 
     pub fn is_running(&self) -> bool {
@@ -274,7 +276,7 @@ enum SendPhase {
 
 struct Sender {
     protocol: Protocol,
-    files: VecDeque<PathBuf>,
+    files: VecDeque<SendFile>,
     data: Vec<u8>,
     pos: usize,
     blk: u8,
@@ -293,7 +295,7 @@ struct Sender {
 }
 
 impl Sender {
-    fn new(protocol: Protocol, files: VecDeque<PathBuf>, now: Instant) -> Self {
+    fn new(protocol: Protocol, files: VecDeque<SendFile>, now: Instant) -> Self {
         let mut s = Sender {
             protocol,
             files,
@@ -312,28 +314,21 @@ impl Sender {
             sent_files: Vec::new(),
             mtime: 0,
         };
-        if let Err(e) = s.load_next() {
-            s.outcome = Outcome::Failed(format!("{e:#}"));
-        }
+        s.load_next();
         s.phase = SendPhase::WaitStart(if protocol == Protocol::Ymodem { Stage::Header } else { Stage::Data });
         s
     }
 
-    fn load_next(&mut self) -> Result<bool> {
-        let Some(path) = self.files.pop_front() else { return Ok(false) };
-        self.data = fs::read(&path).with_context(|| format!("読み込めません: {}", path.display()))?;
-        self.mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+    fn load_next(&mut self) -> bool {
+        let Some(f) = self.files.pop_front() else { return false };
+        self.data = f.data;
+        self.mtime = f.mtime;
         self.pos = 0;
         self.blk = 1;
-        self.progress.file = file_name(&path);
+        self.progress.file = file_name(&f.name);
         self.progress.bytes = 0;
         self.progress.total = Some(self.data.len() as u64);
-        Ok(true)
+        true
     }
 
     fn fail(&mut self, msg: impl Into<String>, out: &mut Vec<u8>) {
@@ -447,17 +442,9 @@ impl Sender {
                     self.outcome = Outcome::Done(format!("{} を送信しました", self.progress.file));
                     return;
                 }
-                match self.load_next() {
-                    Ok(true) => {
-                        self.phase = SendPhase::WaitStart(Stage::Header);
-                        self.deadline = now + START_TIMEOUT;
-                    }
-                    Ok(false) => {
-                        self.phase = SendPhase::WaitStart(Stage::BatchEnd);
-                        self.deadline = now + START_TIMEOUT;
-                    }
-                    Err(e) => self.fail(format!("{e:#}"), out),
-                }
+                let next = if self.load_next() { Stage::Header } else { Stage::BatchEnd };
+                self.phase = SendPhase::WaitStart(next);
+                self.deadline = now + START_TIMEOUT;
             }
             Stage::BatchEnd => {
                 self.outcome = Outcome::Done(format!("{} を送信しました", self.sent_files.join(", ")));
@@ -496,13 +483,15 @@ enum RecvPhase {
 
 struct Receiver {
     protocol: Protocol,
-    dest: PathBuf,
+    sink: Box<dyn FileSink>,
+    /// sink にファイルを作ってある
+    file_open: bool,
     crc: bool,
     phase: RecvPhase,
     expect: u8,
     buf: Vec<u8>,
-    file: Option<File>,
-    path: Option<PathBuf>,
+    /// 保存中のファイルの表示名
+    path: Option<String>,
     size: Option<u64>,
     /// XMODEM では末尾の SUB を削るため最後のブロックを保留する
     held: Vec<u8>,
@@ -517,15 +506,15 @@ struct Receiver {
 }
 
 impl Receiver {
-    fn new(protocol: Protocol, dest: PathBuf, now: Instant) -> (Self, Vec<u8>) {
+    fn new(protocol: Protocol, sink: Box<dyn FileSink>, now: Instant) -> (Self, Vec<u8>) {
         let r = Receiver {
             protocol,
-            dest,
+            sink,
+            file_open: false,
             crc: true,
             phase: if protocol == Protocol::Ymodem { RecvPhase::Header } else { RecvPhase::Data },
             expect: 1,
             buf: Vec::new(),
-            file: None,
             path: None,
             size: None,
             held: Vec::new(),
@@ -543,7 +532,6 @@ impl Receiver {
 
     fn fail(&mut self, msg: impl Into<String>, out: &mut Vec<u8>) {
         out.extend(cancel_bytes());
-        self.close_file();
         self.outcome = Outcome::Failed(msg.into());
     }
 
@@ -570,7 +558,6 @@ impl Receiver {
                     CAN => {
                         self.cans += 1;
                         if self.cans >= 2 {
-                            self.close_file();
                             self.outcome = Outcome::Failed("相手が中止しました".into());
                         }
                     }
@@ -653,11 +640,11 @@ impl Receiver {
             .map(|&c| c as char)
             .collect();
         self.size = size_str.parse().ok();
-        let path = unique_path(&self.dest.join(safe_name(&name)));
-        match File::create(&path) {
-            Ok(f) => self.file = Some(f),
-            Err(e) => return self.fail(format!("保存できません {}: {e}", path.display()), out),
-        }
+        let path = match self.sink.create(Some(&safe_name(&name))) {
+            Ok(p) => p,
+            Err(e) => return self.fail(format!("{e:#}"), out),
+        };
+        self.file_open = true;
         self.progress.file = file_name(&path);
         self.progress.bytes = 0;
         self.progress.total = self.size;
@@ -671,11 +658,11 @@ impl Receiver {
     }
 
     fn open_xmodem_file(&mut self) -> Result<()> {
-        if self.file.is_none() {
-            let f = File::create(&self.dest).with_context(|| format!("保存できません: {}", self.dest.display()))?;
-            self.file = Some(f);
-            self.progress.file = file_name(&self.dest);
-            self.path = Some(self.dest.clone());
+        if !self.file_open {
+            let path = self.sink.create(None)?;
+            self.file_open = true;
+            self.progress.file = file_name(&path);
+            self.path = Some(path);
         }
         Ok(())
     }
@@ -686,12 +673,15 @@ impl Receiver {
                 Some(size) => &body[..(size.saturating_sub(self.progress.bytes) as usize).min(body.len())],
                 None => body,
             };
-            self.file.as_mut().context("ファイルが開かれていません")?.write_all(data)?;
+            if !self.file_open {
+                bail!("ファイルが開かれていません");
+            }
+            self.sink.write(data)?;
             self.progress.bytes += data.len() as u64;
         } else {
             self.open_xmodem_file()?;
             let held = std::mem::replace(&mut self.held, body.to_vec());
-            self.file.as_mut().unwrap().write_all(&held)?;
+            self.sink.write(&held)?;
             self.progress.bytes += body.len() as u64;
         }
         Ok(())
@@ -711,16 +701,19 @@ impl Receiver {
             while last.last() == Some(&SUB) {
                 last.pop();
             }
-            if let Err(e) = self.file.as_mut().unwrap().write_all(&last) {
+            if let Err(e) = self.sink.write(&last) {
                 return self.fail(format!("{e:#}"), out);
             }
         }
+        if let Err(e) = self.sink.finish().context("保存を完了できません") {
+            return self.fail(format!("{e:#}"), out);
+        }
+        self.file_open = false;
         out.push(ACK);
         self.progress.files_done += 1;
         if let Some(p) = self.path.take() {
-            self.saved.push(p.display().to_string());
+            self.saved.push(p);
         }
-        self.close_file();
         if self.protocol == Protocol::Ymodem {
             // 次のファイル (またはバッチ終了) のヘッダを要求
             self.phase = RecvPhase::Header;
@@ -729,12 +722,6 @@ impl Receiver {
             self.deadline = now + ACK_TIMEOUT;
         } else {
             self.outcome = Outcome::Done(format!("{} を受信しました", self.saved.join(", ")));
-        }
-    }
-
-    fn close_file(&mut self) {
-        if let Some(mut f) = self.file.take() {
-            let _ = f.flush();
         }
     }
 
@@ -761,8 +748,8 @@ impl Receiver {
     }
 }
 
-fn file_name(p: &Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())
+fn file_name(p: &str) -> String {
+    Path::new(p).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string())
 }
 
 fn decode_name(raw: &[u8]) -> String {
@@ -773,7 +760,7 @@ fn decode_name(raw: &[u8]) -> String {
 }
 
 /// パス区切りなどを取り除いたファイル名
-fn safe_name(name: &str) -> String {
+pub fn safe_name(name: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or("");
     let base: String = base.chars().filter(|c| !c.is_control()).collect();
     if base.is_empty() || base == "." || base == ".." {
@@ -783,19 +770,11 @@ fn safe_name(name: &str) -> String {
     }
 }
 
-/// 既存ファイルを上書きしないよう name.1, name.2 ... を付ける
-fn unique_path(p: &Path) -> PathBuf {
-    if !p.exists() {
-        return p.to_path_buf();
-    }
-    (1..)
-        .map(|i| PathBuf::from(format!("{}.{i}", p.display())))
-        .find(|c| !c.exists())
-        .unwrap()
-}
-
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
     use super::*;
 
     #[test]
@@ -803,11 +782,39 @@ mod tests {
         assert_eq!(crc16(b"123456789"), 0x31c3);
     }
 
+    type Saved = Rc<RefCell<Vec<(String, Vec<u8>)>>>;
+
+    /// 受信したファイルをメモリに溜める。XMODEM は `xmodem_name` で保存する
+    struct MemSink {
+        xmodem_name: &'static str,
+        saved: Saved,
+    }
+
+    impl FileSink for MemSink {
+        fn create(&mut self, name: Option<&str>) -> Result<String> {
+            let name = name.unwrap_or(self.xmodem_name).to_string();
+            self.saved.borrow_mut().push((name.clone(), Vec::new()));
+            Ok(name)
+        }
+        fn write(&mut self, data: &[u8]) -> Result<()> {
+            self.saved.borrow_mut().last_mut().unwrap().1.extend_from_slice(data);
+            Ok(())
+        }
+        fn finish(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn mem_sink(xmodem_name: &'static str) -> (Box<dyn FileSink>, Saved) {
+        let saved = Saved::default();
+        (Box::new(MemSink { xmodem_name, saved: saved.clone() }), saved)
+    }
+
     /// 送信側と受信側を直結して転送させる
-    fn run(proto: Protocol, files: Vec<PathBuf>, dest: PathBuf) -> (Outcome, Outcome) {
+    fn run(proto: Protocol, files: Vec<SendFile>, sink: Box<dyn FileSink>) -> (Outcome, Outcome) {
         let mut now = Instant::now();
         let mut tx = Transfer::send(proto, files, now).unwrap();
-        let (mut rx, mut to_tx) = Transfer::recv(proto, dest, now).unwrap();
+        let (mut rx, mut to_tx) = Transfer::recv(proto, sink, now);
         for _ in 0..100_000 {
             let to_rx = tx.input(&to_tx, now);
             to_tx = rx.input(&to_rx, now);
@@ -824,64 +831,57 @@ mod tests {
         (tx.outcome, rx.outcome)
     }
 
-    fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("null-term-test-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
-    }
-
     fn sample(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i * 7 % 251) as u8).collect()
     }
 
+    fn file(name: &str, data: Vec<u8>) -> SendFile {
+        SendFile { name: name.into(), data, mtime: 0 }
+    }
+
     #[test]
     fn ymodem_batch() {
-        let d = tmpdir("y");
-        let (src, dst) = (d.join("src"), d.join("dst"));
-        fs::create_dir_all(&src).unwrap();
-        fs::create_dir_all(&dst).unwrap();
         let sizes = [0usize, 1, 128, 129, 1024, 1025, 5000];
-        let files: Vec<PathBuf> = sizes
-            .iter()
-            .map(|&n| {
-                let p = src.join(format!("f{n}.bin"));
-                fs::write(&p, sample(n)).unwrap();
-                p
-            })
-            .collect();
-        let (t, r) = run(Protocol::Ymodem, files, dst.clone());
+        let files: Vec<SendFile> = sizes.iter().map(|&n| file(&format!("f{n}.bin"), sample(n))).collect();
+        let (sink, saved) = mem_sink("unused");
+        let (t, r) = run(Protocol::Ymodem, files, sink);
         assert!(matches!(t, Outcome::Done(_)), "{t:?}");
         assert!(matches!(r, Outcome::Done(_)), "{r:?}");
-        for n in sizes {
-            assert_eq!(fs::read(dst.join(format!("f{n}.bin"))).unwrap(), sample(n), "size {n}");
+        let saved = saved.borrow();
+        assert_eq!(saved.len(), sizes.len());
+        for (n, (name, data)) in sizes.iter().zip(saved.iter()) {
+            assert_eq!(name, &format!("f{n}.bin"));
+            assert_eq!(data, &sample(*n), "size {n}");
         }
     }
 
     #[test]
     fn xmodem_variants() {
         for proto in [Protocol::Xmodem, Protocol::Xmodem1k] {
-            let d = tmpdir(proto.label());
-            let src = d.join("a.txt");
             // 末尾が SUB でないデータは長さも一致する
             let data = sample(3000);
-            fs::write(&src, &data).unwrap();
-            let dst = d.join("b.txt");
-            let (t, r) = run(proto, vec![src], dst.clone());
+            let (sink, saved) = mem_sink("b.txt");
+            let (t, r) = run(proto, vec![file("a.txt", data.clone())], sink);
             assert!(matches!(t, Outcome::Done(_)), "{t:?}");
             assert!(matches!(r, Outcome::Done(_)), "{r:?}");
-            assert_eq!(fs::read(&dst).unwrap(), data);
+            assert_eq!(*saved.borrow(), vec![("b.txt".to_string(), data)]);
         }
     }
 
     #[test]
+    fn received_name_has_no_path() {
+        // 相手がパス付きの名前を送ってきても保存先の外に出ない
+        assert_eq!(safe_name("../../etc/x"), "x");
+        assert_eq!(safe_name("C:\\dir\\a.txt"), "a.txt");
+        assert_eq!(safe_name(".."), "received.bin");
+    }
+
+    #[test]
     fn corrupted_packet_is_resent() {
-        let d = tmpdir("err");
-        let src = d.join("a.bin");
-        fs::write(&src, sample(2000)).unwrap();
         let now = Instant::now();
-        let mut tx = Transfer::send(Protocol::Xmodem, vec![src], now).unwrap();
-        let (mut rx, start) = Transfer::recv(Protocol::Xmodem, d.join("b.bin"), now).unwrap();
+        let mut tx = Transfer::send(Protocol::Xmodem, vec![file("a.bin", sample(2000))], now).unwrap();
+        let (sink, saved) = mem_sink("b.bin");
+        let (mut rx, start) = Transfer::recv(Protocol::Xmodem, sink, now);
         let mut pkt = tx.input(&start, now);
         pkt[10] ^= 0xff; // 1 ブロック目を壊す
         let reply = rx.input(&pkt, now);
@@ -895,7 +895,7 @@ mod tests {
             }
         }
         assert!(matches!(tx.outcome, Outcome::Done(_)));
-        assert_eq!(fs::read(d.join("b.bin")).unwrap(), sample(2000));
+        assert_eq!(saved.borrow()[0].1, sample(2000));
         assert_eq!(tx.progress.errors, 1);
     }
 }

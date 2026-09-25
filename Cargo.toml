@@ -1,16 +1,23 @@
-[package]
-name = "null-term"
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/cli", "crates/web"]
+# `cargo build` は native 版だけ。ブラウザ版は crates/web で trunk build する
+default-members = ["crates/core", "crates/cli"]
+
+[workspace.package]
 version = "1.10.0"
 edition = "2024"
 license = "MIT"
 
-[dependencies]
+[workspace.dependencies]
+null-term-core = { path = "crates/core" }
 anyhow = "1.0.104"
-chrono = "0.4.45"
-clap = { version = "4.6.7", features = ["derive"] }
 encoding_rs = "0.8.42"
-ratatui = "0.29"
-regex = "1.13.1"
-serde_json = "1.0.151"
-serialport = { version = "4", default-features = false }
+# ratzilla 0.3 が ratatui 0.30 を要求するので CLI もこれに揃える
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache"] }
 vt100 = "0.15"
+web-time = "1.1"
+
+[profile.release]
+# wasm のサイズを抑える (CLI にも効くが実害はない)
+lto = true

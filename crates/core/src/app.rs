@@ -169,7 +169,7 @@ impl App {
                 }
             }
             KeyCode::Char('?') => self.popup = Some(Popup::Help),
-            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Char('q') if host.can_quit() => self.quit = true,
             _ => {}
         }
     }

@@ -83,6 +83,10 @@ pub trait Host {
     fn picks_files(&self) -> bool {
         false
     }
+    /// Ctrl-A q で終了できる (ブラウザのタブは閉じられないので false)
+    fn can_quit(&self) -> bool {
+        true
+    }
     /// 受信ダイアログの入力欄の既定値
     fn default_download(&self, protocol: Protocol) -> String {
         if protocol == Protocol::Ymodem { ".".into() } else { "download.bin".into() }

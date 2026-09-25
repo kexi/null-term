@@ -46,7 +46,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         }
     }
 
-    f.render_widget(Paragraph::new(status_line(app)).style(Style::new().bg(Color::DarkGray)), status);
+    f.render_widget(Paragraph::new(status_line(app, status.width)).style(Style::new().bg(Color::DarkGray)), status);
 
     if let Some(popup) = &app.popup {
         draw_popup(f, popup, &app.channels[app.active], &*app.host);
@@ -100,13 +100,61 @@ fn title_line(ch: &Channel, active: bool) -> Line<'static> {
     ])
 }
 
-fn status_line(app: &App) -> Line<'static> {
+/// 幅に収まる分だけ項目を並べる。`items` は (優先度, 項目) で、優先度の小さい順に詰め、
+/// 表示は元の並び順にする (幅が足りないときに末尾から切れてヘルプの案内が消えないように)
+fn fit_items(items: Vec<(u8, Vec<Span<'static>>)>, width: usize) -> Vec<Span<'static>> {
+    let item_width = |spans: &[Span]| spans.iter().map(Span::width).sum::<usize>();
+    let mut order: Vec<usize> = (0..items.len()).collect();
+    order.sort_by_key(|&i| items[i].0);
+    let mut keep = vec![false; items.len()];
+    let mut used = 0;
+    for i in order {
+        let w = item_width(&items[i].1);
+        // 入らない項目を飛ばして低い優先度の短い項目を拾うと、幅によって出る項目が入れ替わるので止める
+        if used + w > width {
+            break;
+        }
+        used += w;
+        keep[i] = true;
+    }
+    items.into_iter().zip(keep).filter(|(_, k)| *k).flat_map(|((_, spans), _)| spans).collect()
+}
+
+fn status_line(app: &App, width: u16) -> Line<'static> {
     let key = Style::new().fg(Color::Black).bg(Color::Gray);
+    let quit = app.host.can_quit();
     match app.mode {
-        Mode::Prefix => Line::from(vec![
-            Span::styled(" Ctrl-A ", Style::new().fg(Color::Black).bg(Color::Yellow)),
-            Span::raw(" Tab:切替 b:bps p:ポート i:モデム名 e:文字コード n:改行 l:エコー c:消去 r:再接続 x:切断 H:回線切断 u:送信 d:受信 L:ログ z:最大化 [:履歴 ?:ヘルプ q:終了"),
-        ]),
+        Mode::Prefix => {
+            let head = Span::styled(" Ctrl-A ", Style::new().fg(Color::Black).bg(Color::Yellow));
+            // (優先度, 表示)。狭いときも ? (ヘルプ) は残す
+            let mut cmds = vec![
+                (2, "Tab:切替"),
+                (4, "b:bps"),
+                (3, "p:ポート"),
+                (8, "i:モデム名"),
+                (7, "e:文字コード"),
+                (7, "n:改行"),
+                (8, "l:エコー"),
+                (8, "c:消去"),
+                (6, "r:再接続"),
+                (6, "x:切断"),
+                (6, "H:回線切断"),
+                (5, "u:送信"),
+                (5, "d:受信"),
+                (8, "L:ログ"),
+                (7, "z:最大化"),
+                (8, "[:履歴"),
+                (1, "?:ヘルプ"),
+            ];
+            if quit {
+                cmds.push((9, "q:終了"));
+            }
+            let items = cmds.into_iter().map(|(p, s)| (p, vec![Span::raw(format!(" {s}"))])).collect();
+            let rest = (width as usize).saturating_sub(head.width());
+            let mut spans = vec![head];
+            spans.extend(fit_items(items, rest));
+            Line::from(spans)
+        }
         Mode::Scroll => Line::from(vec![
             Span::styled(" 履歴 ", Style::new().fg(Color::Black).bg(Color::Cyan)),
             Span::raw(format!(
@@ -114,22 +162,21 @@ fn status_line(app: &App) -> Line<'static> {
                 app.scroll
             )),
         ]),
-        Mode::Normal => Line::from(vec![
-            Span::styled(" Ctrl-A ", key),
-            Span::raw(" コマンド  "),
-            Span::styled(" Ctrl-A Tab ", key),
-            Span::raw(" 画面切替  "),
-            Span::styled(" Ctrl-A b ", key),
-            Span::raw(" bps  "),
-            Span::styled(" Ctrl-A u ", key),
-            Span::raw(" 送信  "),
-            Span::styled(" Ctrl-A d ", key),
-            Span::raw(" 受信  "),
-            Span::styled(" Ctrl-A ? ", key),
-            Span::raw(" ヘルプ  "),
-            Span::styled(" Ctrl-A q ", key),
-            Span::raw(" 終了"),
-        ]),
+        Mode::Normal => {
+            let item = |k: &str, label: &str| vec![Span::styled(format!(" {k} "), key), Span::raw(format!(" {label}  "))];
+            let mut items = vec![
+                (1, item("Ctrl-A", "コマンド")),
+                (3, item("Ctrl-A Tab", "画面切替")),
+                (6, item("Ctrl-A b", "bps")),
+                (4, item("Ctrl-A u", "送信")),
+                (5, item("Ctrl-A d", "受信")),
+                (2, item("Ctrl-A ?", "ヘルプ")),
+            ];
+            if quit {
+                items.push((7, item("Ctrl-A q", "終了")));
+            }
+            Line::from(fit_items(items, width as usize))
+        }
     }
 }
 
@@ -330,7 +377,7 @@ fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel, host: &dyn Host) {
             f.render_widget(Paragraph::new(lines), inner);
         }
         Popup::Help => {
-            let lines = [
+            let mut lines = vec![
                 "Ctrl-A をプレフィックスにして以下のキー",
                 "",
                 "  Tab / o / ↑↓  上下画面の切替",
@@ -355,6 +402,9 @@ fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel, host: &dyn Host) {
                 "",
                 "何かキーを押すと閉じます",
             ];
+            if !host.can_quit() {
+                lines.retain(|l| !l.ends_with("終了"));
+            }
             let area = centered(f.area(), 48, lines.len() as u16 + 2);
             f.render_widget(Clear, area);
             f.render_widget(Paragraph::new(lines.join("\n")).block(block(" ヘルプ ".into())), area);

@@ -216,6 +216,10 @@ impl Host for WebHost {
         true
     }
 
+    fn can_quit(&self) -> bool {
+        false
+    }
+
     fn default_download(&self, protocol: Protocol) -> String {
         if protocol == Protocol::Ymodem { String::new() } else { "download.bin".into() }
     }

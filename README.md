@@ -70,6 +70,8 @@ trunk serve        # http://127.0.0.1:8080/ で確認
 trunk build --release
 ```
 
+リリースビルドでは、本体の `LICENSE.txt` と、wasm に組み込まれる依存クレートのライセンス一覧 `THIRD-PARTY-LICENSES.html`（cargo-about で生成）を配信物に同梱し、ページ下部からリンクしています。
+
 構成: `crates/core`（画面・VT100・キー操作・転送。native / wasm 共通）、`crates/cli`（serialport + crossterm の CLI 版）、`crates/web`（Web Serial + ratzilla のブラウザ版）。
 
 ## キー操作（Ctrl-A のあとに押す）

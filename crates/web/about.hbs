@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>null-term サードパーティライセンス</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 14px/1.6 system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; }
+  pre { white-space: pre-wrap; font-size: 12px; padding: 12px; border: 1px solid #8884; border-radius: 6px; }
+  h2 { margin-top: 2em; }
+  ul.used-by { columns: 2; }
+</style>
+</head>
+<body>
+<h1>サードパーティライセンス</h1>
+<p>null-term ブラウザ版に組み込まれている依存クレートのライセンスです。null-term 本体のライセンスは <a href="LICENSE.txt">LICENSE.txt</a> (MIT) を参照してください。</p>
+<h2>ライセンスの種類</h2>
+<ul>
+{{#each overview}}
+  <li>{{name}} ({{count}})</li>
+{{/each}}
+</ul>
+<h2>全文</h2>
+{{#each licenses}}
+<section>
+  <h3>{{name}}</h3>
+  <p>使用しているクレート:</p>
+  <ul class="used-by">
+  {{#each used_by}}
+    <li><a href="{{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}}">{{crate.name}} {{crate.version}}</a></li>
+  {{/each}}
+  </ul>
+  <pre>{{text}}</pre>
+</section>
+{{/each}}
+</body>
+</html>

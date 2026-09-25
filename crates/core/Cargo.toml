@@ -4,6 +4,7 @@ description = "null-term の画面・チャンネル・ファイル転送 (nativ
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish = false
 
 [dependencies]
 anyhow.workspace = true

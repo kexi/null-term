@@ -1,0 +1,16 @@
+# cargo-about: ブラウザ版 (wasm) に組み込まれる依存クレートのライセンス一覧を作る設定
+# 新しいライセンスの依存が増えたら、内容を確認してからここに足す
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Zlib",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "0BSD",
+]
+targets = ["wasm32-unknown-unknown"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# 自分のクレート (publish = false の null-term-*) は LICENSE.txt で表示するので除く
+private = { ignore = true }

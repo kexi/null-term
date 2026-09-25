@@ -38,6 +38,8 @@
             (pkgs.rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; })
             # wasm-bindgen は Cargo.lock と同じ版を trunk が自動で取ってくる
             pkgs.trunk
+            # ブラウザ版に同梱する依存クレートのライセンス一覧を作る
+            pkgs.cargo-about
           ];
         };
       });

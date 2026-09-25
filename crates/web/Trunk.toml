@@ -1,0 +1,4 @@
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = ["hooks/licenses.sh"]

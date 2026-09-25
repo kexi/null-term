@@ -422,7 +422,12 @@ fn start() -> Result<()> {
         move || {
             pump();
             with_app(|app| {
-                let _ = terminal.borrow_mut().draw(|f| ui::draw(f, app));
+                let mut terminal = terminal.borrow_mut();
+                if terminal.backend().take_resized() {
+                    // DOM のセルが作り直されたので差分ではなく全体を描く
+                    let _ = terminal.clear();
+                }
+                let _ = terminal.draw(|f| ui::draw(f, app));
             });
             last_draw.set(js_sys::Date::now());
         }

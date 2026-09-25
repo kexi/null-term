@@ -3,6 +3,10 @@
 //! ratzilla 0.3.1 の DomBackend::size() は、採寸したセルの大きさではなく既定値 (10x20px) で
 //! 窓の大きさを割った値から 1 を引いて返すため、ratatui のバッファと DOM 上のセル数が食い違う
 //! (右端と下端が描かれない)。DomBackend が内部で使うのと同じ計算で size() を返し直す。
+//!
+//! また DomBackend は窓のリサイズのたびにセルを空で作り直すが、桁数・行数が変わらないと
+//! ratatui は差分しか描かないため、画面が真っ黒になる。リサイズを `take_resized` で知らせ、
+//! 呼び出し側で Terminal::clear して全体を描き直させる。
 
 use std::cell::Cell as StdCell;
 use std::rc::Rc;
@@ -20,6 +24,8 @@ pub struct FixedDomBackend {
     parent: Element,
     /// 採寸したセルの (幅, 高さ) px。窓の大きさが変わったら測り直す
     cell: Rc<StdCell<Option<(f64, f64)>>>,
+    /// 前回の描画からリサイズがあった
+    resized: Rc<StdCell<bool>>,
 }
 
 impl FixedDomBackend {
@@ -28,13 +34,22 @@ impl FixedDomBackend {
         let doc = web_sys::window().unwrap().document().unwrap();
         let parent = doc.get_element_by_id(parent_id).ok_or("描画先の要素がありません")?;
         let cell = Rc::new(StdCell::new(None));
-        let reset = cell.clone();
-        let on_resize = Closure::<dyn FnMut()>::new(move || reset.set(None));
+        let resized = Rc::new(StdCell::new(false));
+        let (reset, flag) = (cell.clone(), resized.clone());
+        let on_resize = Closure::<dyn FnMut()>::new(move || {
+            reset.set(None);
+            flag.set(true);
+        });
         let _ = web_sys::window()
             .unwrap()
             .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref());
         on_resize.forget();
-        Ok(FixedDomBackend { inner, parent, cell })
+        Ok(FixedDomBackend { inner, parent, cell, resized })
+    }
+
+    /// 前回呼んでからリサイズがあったか
+    pub fn take_resized(&self) -> bool {
+        self.resized.replace(false)
     }
 
     /// DomBackend::measure_cell_size と同じ方法で測る

@@ -206,6 +206,9 @@ fn to_serialport(cfg: &PortConfig) -> (DataBits, Parity, StopBits, FlowControl) 
 impl Host for NativeHost {
     fn open(&self, ch: usize, generation: u64, cfg: &PortConfig) -> Result<Opened, String> {
         let path = cfg.path.clone().unwrap_or_default();
+        if path.starts_with("ws://") || path.starts_with("wss://") {
+            return Err("WebSocket への接続はブラウザ版だけの機能です".into());
+        }
         let (data_bits, parity, stop_bits, flow) = to_serialport(cfg);
         let result = serialport::new(&path, cfg.baud)
             .data_bits(data_bits)
@@ -251,7 +254,7 @@ impl Host for NativeHost {
                 }
             }
         });
-        Ok(Opened { link: Box::new(NativeLink { port, stop }), note })
+        Ok(Opened::serial(Box::new(NativeLink { port, stop }), note))
     }
 
     fn list_ports(&self) -> Vec<String> {

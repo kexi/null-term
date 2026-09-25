@@ -23,9 +23,11 @@ wasm-bindgen-futures = "0.4"
 [dependencies.web-sys]
 version = "0.3"
 features = [
+    "BinaryType",
     "Blob",
     "BlobPropertyBag",
     "ClipboardEvent",
+    "CloseEvent",
     "CompositionEvent",
     "DataTransfer",
     "Document",
@@ -41,12 +43,14 @@ features = [
     "HtmlTextAreaElement",
     "KeyboardEvent",
     "Location",
+    "MessageEvent",
     "Navigator",
     "ReadableStream",
     "ReadableStreamDefaultReader",
     "Storage",
     "Url",
     "UrlSearchParams",
+    "WebSocket",
     "Window",
     "WritableStream",
     "WritableStreamDefaultWriter",

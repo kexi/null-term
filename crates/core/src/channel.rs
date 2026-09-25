@@ -287,7 +287,10 @@ impl Channel {
         };
         self.writer = Some(opened.link);
         self.status = format!("接続中{}", opened.note);
-        if probe {
+        if let Some(enc) = opened.encoding {
+            self.set_encoding(enc);
+        }
+        if probe && opened.modem {
             self.modem = None;
             self.probe_modem();
         }
@@ -407,6 +410,10 @@ impl Channel {
             }
             SerialEvent::Error { generation, msg, .. } if generation == self.generation => {
                 self.fail(format!("エラー: {msg}"));
+            }
+            SerialEvent::Closed { generation, msg, .. } if generation == self.generation => {
+                self.close_port();
+                self.status = msg;
             }
             SerialEvent::OpenFailed { generation, msg, .. } if generation == self.generation => {
                 self.close_port();

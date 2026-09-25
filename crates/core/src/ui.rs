@@ -260,20 +260,29 @@ fn draw_popup(f: &mut Frame, popup: &Popup, ch: &Channel, host: &dyn Host) {
             };
             f.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Yellow)), input);
         }
-        Popup::Port { ports, sel, request } => {
+        Popup::Port { ports, sel, request, custom } => {
             let rows = ports.len() + usize::from(*request);
-            let area = centered(f.area(), 50, rows.max(1) as u16 + 2);
+            let area = centered(f.area(), 56, rows.max(1) as u16 + 3);
             f.render_widget(Clear, area);
             let b = block(format!(" {} のポート (Enter で接続) ", ch.name()));
+            let inner = b.inner(area);
+            f.render_widget(b, area);
+            let [list_area, input] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+            let text = if custom.is_empty() {
+                "パスや ws:// の URL を直接入力して Enter でも可".to_string()
+            } else {
+                format!("直接入力: {custom}_")
+            };
+            f.render_widget(Paragraph::new(text).style(Style::new().fg(Color::Yellow)), input);
             if rows == 0 {
-                f.render_widget(Paragraph::new("シリアルポートが見つかりません").block(b), area);
+                f.render_widget(Paragraph::new("シリアルポートが見つかりません"), list_area);
             } else {
                 let mut items: Vec<ListItem> = ports.iter().map(|p| ListItem::new(p.as_str())).collect();
                 if *request {
                     items.push(ListItem::new("＋ 新しいポートを許可する…").style(Style::new().fg(Color::LightCyan)));
                 }
-                let mut st = ListState::default().with_selected(Some(*sel));
-                f.render_stateful_widget(List::new(items).block(b).highlight_style(hl), area, &mut st);
+                let mut st = ListState::default().with_selected(custom.is_empty().then_some(*sel));
+                f.render_stateful_widget(List::new(items).highlight_style(hl), list_area, &mut st);
             }
         }
         Popup::Transfer { dir, proto, path, error } => {

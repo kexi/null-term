@@ -16,8 +16,9 @@ pub enum Mode {
 
 pub enum Popup {
     Baud { sel: usize, custom: String },
-    /// `request` はリスト末尾に「新しいポートを許可」を出すか (その行も sel で選べる)
-    Port { ports: Vec<String>, sel: usize, request: bool },
+    /// `request` はリスト末尾に「新しいポートを許可」を出すか (その行も sel で選べる)。
+    /// `custom` は直接入力したパスや URL (入力があれば sel より優先)
+    Port { ports: Vec<String>, sel: usize, request: bool, custom: String },
     /// XMODEM / YMODEM の送受信ダイアログ
     Transfer { dir: Direction, proto: usize, path: String, error: Option<String> },
     Help,
@@ -138,7 +139,7 @@ impl App {
                     .as_ref()
                     .and_then(|p| ports.iter().position(|x| x == p))
                     .unwrap_or(0);
-                self.popup = Some(Popup::Port { ports, sel, request: host.can_request_port() });
+                self.popup = Some(Popup::Port { ports, sel, request: host.can_request_port(), custom: String::new() });
             }
             KeyCode::Char('e') => {
                 let i = ENCODINGS.iter().position(|&e| e == ch.encoding).unwrap_or(0);
@@ -253,13 +254,21 @@ impl App {
                 }
                 _ => {}
             },
-            Popup::Port { ports, sel, request } => {
+            Popup::Port { ports, sel, request, custom } => {
                 let rows = ports.len() + usize::from(*request);
                 match k.code {
                     KeyCode::Up => *sel = sel.saturating_sub(1),
                     KeyCode::Down => *sel = (*sel + 1).min(rows.saturating_sub(1)),
+                    KeyCode::Char(c) if !k.ctrl => custom.push(c),
+                    KeyCode::Backspace => {
+                        custom.pop();
+                    }
                     KeyCode::Enter => {
-                        if let Some(p) = ports.get(*sel) {
+                        let typed = custom.trim();
+                        if !typed.is_empty() {
+                            ch.cfg.path = Some(typed.to_string());
+                            ch.open(host);
+                        } else if let Some(p) = ports.get(*sel) {
                             ch.cfg.path = Some(p.clone());
                             ch.open(host);
                         } else if *request {

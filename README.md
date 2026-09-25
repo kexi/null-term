@@ -44,6 +44,23 @@ cargo build --release
   - bps やデータ形式を変えるとポートを開き直します
   - Ctrl-W / Ctrl-T / Ctrl-N などブラウザが先に取るキーは送れません
 
+### 機器なしで試す（null-bbs に WebSocket で接続）
+
+モデムやシリアル機器がなくても、姉妹プロジェクトのホスト局 [null-bbs](https://github.com/GOROman/null-bbs) に WebSocket で直接つないで試せます。
+
+```sh
+git clone https://github.com/GOROman/null-bbs && cd null-bbs
+cargo build --release && cp config.example.toml null-bbs.toml
+./target/release/null-bbs          # WebSocket は既定で ws://127.0.0.1:5657
+```
+
+ブラウザ版を **https://kexi.github.io/null-term/?a=ws://127.0.0.1:5657** で開くと、上画面が null-bbs につながります
+（`Ctrl-A p` のポート選択で `ws://` の URL を選ぶか直接入力しても同じ）。
+
+- WebSocket の回線では接続時に `ATI3` を送らず、文字コードは null-bbs に合わせて UTF-8 に切り替えます
+- `Ctrl-A H` で切断します。BBS 側から切られた場合は自動で再接続しません
+- 上下両方の画面を BBS につなぐと、チャットや電報 (TEL) を 1 画面ずつの利用者として試せます
+
 手元でビルドする場合（`nix develop` か direnv で wasm32 ターゲットと trunk が入ります）:
 
 ```

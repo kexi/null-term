@@ -6,6 +6,7 @@
 use std::io::Write;
 
 use anyhow::Result;
+use encoding_rs::Encoding;
 
 use crate::channel::PortConfig;
 use crate::transfer::{FileSink, Protocol, SendFile};
@@ -17,12 +18,17 @@ pub enum SerialEvent {
     Error { ch: usize, generation: u64, msg: String },
     /// 非同期に開くホストで、開くのに失敗した
     OpenFailed { ch: usize, generation: u64, msg: String },
+    /// 相手から切られた (WebSocket など)。自動再接続はしない
+    Closed { ch: usize, generation: u64, msg: String },
 }
 
 impl SerialEvent {
     pub fn ch(&self) -> usize {
         match self {
-            SerialEvent::Data { ch, .. } | SerialEvent::Error { ch, .. } | SerialEvent::OpenFailed { ch, .. } => *ch,
+            SerialEvent::Data { ch, .. }
+            | SerialEvent::Error { ch, .. }
+            | SerialEvent::OpenFailed { ch, .. }
+            | SerialEvent::Closed { ch, .. } => *ch,
         }
     }
 }
@@ -41,6 +47,17 @@ pub struct Opened {
     pub link: Box<dyn Link>,
     /// 状態表示に添える注記 (例: " (bps 設定なし)")
     pub note: &'static str,
+    /// 相手がモデムで、接続時に ATI3 を送ってよい (BBS に直接つながる回線では false)
+    pub modem: bool,
+    /// 相手の文字コードが決まっていれば、開いたときにそれに切り替える
+    pub encoding: Option<&'static Encoding>,
+}
+
+impl Opened {
+    /// シリアルポート (相手はモデムかもしれない、文字コードは利用者の設定のまま)
+    pub fn serial(link: Box<dyn Link>, note: &'static str) -> Self {
+        Opened { link, note, modem: true, encoding: None }
+    }
 }
 
 pub trait Host {

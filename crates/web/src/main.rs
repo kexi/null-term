@@ -7,6 +7,7 @@
 mod backend;
 mod files;
 mod serial;
+mod ws;
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -122,17 +123,51 @@ fn load_port(ch: usize, default_baud: u32, flow: Flow) -> PortConfig {
     parsed.unwrap_or_else(|| PortConfig::empty(default_baud, flow))
 }
 
+/// 最近つないだ WebSocket の URL (新しい順)
+const WS_URLS_KEY: &str = "null-term.ws-urls";
+/// null-bbs の WebSocket 回線の既定の待ち受け
+const DEFAULT_WS_URL: &str = "ws://127.0.0.1:5657";
+
+fn ws_urls() -> Vec<String> {
+    let saved = storage().and_then(|s| s.get_item(WS_URLS_KEY).ok().flatten()).unwrap_or_default();
+    let mut urls: Vec<String> = saved.lines().filter(|l| ws::is_ws_url(l)).map(String::from).collect();
+    if urls.is_empty() {
+        urls.push(DEFAULT_WS_URL.into());
+    }
+    urls
+}
+
+fn remember_ws_url(url: &str) {
+    let mut urls = ws_urls();
+    urls.retain(|u| u != url);
+    urls.insert(0, url.to_string());
+    urls.truncate(5);
+    if let Some(s) = storage() {
+        let _ = s.set_item(WS_URLS_KEY, &urls.join("\n"));
+    }
+}
+
 struct WebHost;
 
 impl Host for WebHost {
     fn open(&self, ch: usize, generation: u64, cfg: &PortConfig) -> Result<Opened, String> {
+        let path = cfg.path.as_deref().unwrap_or_default();
+        if ws::is_ws_url(path) {
+            let link = ws::open(ch, generation, path)?;
+            remember_ws_url(path);
+            save_port(ch, cfg);
+            // WebSocket の相手は null-bbs (UTF-8) で、モデムではないので ATI3 は送らない
+            return Ok(Opened { link: Box::new(link), note: " (WebSocket)", modem: false, encoding: Some(encoding_rs::UTF_8) });
+        }
         let link = serial::open(ch, generation, cfg)?;
         save_port(ch, cfg);
-        Ok(Opened { link: Box::new(link), note: "" })
+        Ok(Opened::serial(Box::new(link), ""))
     }
 
     fn list_ports(&self) -> Vec<String> {
-        serial::port_names()
+        let mut ports = serial::port_names();
+        ports.extend(ws_urls());
+        ports
     }
 
     fn can_request_port(&self) -> bool {
@@ -282,8 +317,10 @@ fn watch_ports() {
     on_disconnect.forget();
 }
 
-/// URL の ?baud=2400&enc=sjis&newline=cr&flow=rts&del&echo&noprobe で既定値を変える
+/// URL の ?baud=2400&enc=sjis&newline=cr&flow=rts&del&echo&noprobe で既定値を変える。
+/// ?a=ws://… / ?b=ws://… で、その画面を WebSocket (BBS) につないで起動する
 struct Options {
+    ports: [Option<String>; 2],
     baud: u32,
     encoding: &'static encoding_rs::Encoding,
     newline: Newline,
@@ -298,6 +335,7 @@ fn options() -> Result<Options> {
     let q = web_sys::UrlSearchParams::new_with_str(&search).map_err(|_| anyhow::anyhow!("URL が不正です"))?;
     let get = |k: &str| q.get(k);
     Ok(Options {
+        ports: [get("a"), get("b")],
         baud: get("baud").map(|b| b.parse()).transpose()?.unwrap_or(9600),
         encoding: channel::parse_encoding(&get("enc").unwrap_or_else(|| "sjis".into()))?,
         newline: Newline::parse(&get("newline").unwrap_or_else(|| "cr".into()))?,
@@ -334,7 +372,11 @@ fn start() -> Result<()> {
     let o = options()?;
     let bs = if o.del { 0x7f } else { 0x08 };
     let channels = [0, 1].map(|i| {
-        let mut ch = Channel::new(i, load_port(i, o.baud, o.flow), o.encoding, o.newline, bs);
+        let mut cfg = load_port(i, o.baud, o.flow);
+        if let Some(p) = &o.ports[i] {
+            cfg.path = Some(p.clone());
+        }
+        let mut ch = Channel::new(i, cfg, o.encoding, o.newline, bs);
         ch.local_echo = o.echo;
         ch.auto_probe = o.probe;
         ch.status = "未接続 (Ctrl-A p でポート選択)".into();
@@ -346,10 +388,10 @@ fn start() -> Result<()> {
     watch_ports();
     spawn_local(async {
         serial::load_granted_ports().await;
-        // 前回のポートが許可済みなら開く
+        // 前回のポート (許可済みのもの) か WebSocket なら開く
         with_app(|app| {
             for ch in app.channels.iter_mut() {
-                if ch.cfg.path.as_ref().is_some_and(|p| serial::port_names().contains(p)) {
+                if ch.cfg.path.as_ref().is_some_and(|p| ws::is_ws_url(p) || serial::port_names().contains(p)) {
                     ch.open(&*app.host);
                 }
             }

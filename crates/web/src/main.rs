@@ -281,6 +281,22 @@ fn setup_input() {
     let _ = ta.add_event_listener_with_callback("compositionend", on_compose.as_ref().unchecked_ref());
     on_compose.forget();
 
+    // keydown を経ずに挿入された文字 (モバイルのキーボード、音声入力、自動操作など) も送る。
+    // keydown で処理したキーは preventDefault しているので、ここには来ない
+    let target = ta.clone();
+    let on_input = Closure::<dyn FnMut(web_sys::InputEvent)>::new(move |e: web_sys::InputEvent| {
+        if e.is_composing() {
+            return;
+        }
+        let text = target.value();
+        target.set_value("");
+        if !text.is_empty() {
+            with_app(|app| app.paste(&text));
+        }
+    });
+    let _ = ta.add_event_listener_with_callback("input", on_input.as_ref().unchecked_ref());
+    on_input.forget();
+
     let on_paste = Closure::<dyn FnMut(ClipboardEvent)>::new(|e: ClipboardEvent| {
         e.prevent_default();
         let text = e.clipboard_data().and_then(|d| d.get_data("text").ok()).unwrap_or_default();
@@ -398,25 +414,42 @@ fn start() -> Result<()> {
         });
     });
 
-    // 転送のタイムアウトなど時間で進む処理
-    let tick = Closure::<dyn FnMut()>::new(pump);
+    let backend = backend::FixedDomBackend::new("term").map_err(|e| anyhow::anyhow!("{e}"))?;
+    let terminal = Rc::new(RefCell::new(Terminal::new(backend)?));
+    let last_draw = Rc::new(std::cell::Cell::new(0.0));
+    let render = {
+        let (terminal, last_draw) = (terminal.clone(), last_draw.clone());
+        move || {
+            pump();
+            with_app(|app| {
+                let _ = terminal.borrow_mut().draw(|f| ui::draw(f, app));
+            });
+            last_draw.set(js_sys::Date::now());
+        }
+    };
+
+    // 転送のタイムアウトなど時間で進む処理。
+    // 窓が隠れていると requestAnimationFrame が止まるので、しばらく描いていなければここでも描く
+    let draw_if_stalled = render.clone();
+    let tick = Closure::<dyn FnMut()>::new(move || {
+        if js_sys::Date::now() - last_draw.get() > 200.0 {
+            draw_if_stalled();
+        } else {
+            pump();
+        }
+    });
     let _ = web_sys::window()
         .unwrap()
         .set_interval_with_callback_and_timeout_and_arguments_0(tick.as_ref().unchecked_ref(), 50);
     tick.forget();
 
-    let backend = backend::FixedDomBackend::new("term").map_err(|e| anyhow::anyhow!("{e}"))?;
-    let mut terminal = Terminal::new(backend)?;
     // ratzilla の draw_web は DomBackend 前提なので、requestAnimationFrame のループを自前で回す
     // 自分自身を次のフレームに登録するため、クロージャを共有セルに入れる
     type Frame = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
     let frame: Frame = Rc::new(RefCell::new(None));
     let next = frame.clone();
     *frame.borrow_mut() = Some(Closure::new(move || {
-        pump();
-        with_app(|app| {
-            let _ = terminal.draw(|f| ui::draw(f, app));
-        });
+        render();
         request_frame(next.borrow().as_ref().unwrap());
     }));
     request_frame(frame.borrow().as_ref().unwrap());

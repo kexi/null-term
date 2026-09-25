@@ -3,7 +3,8 @@ name: Pages
 
 on:
   push:
-    branches: [main]
+    # web-serial は main にマージするまでの暫定 (マージ後に外す)
+    branches: [main, web-serial]
     paths:
       - "crates/**"
       - "Cargo.toml"
